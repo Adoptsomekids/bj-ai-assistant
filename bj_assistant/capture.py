@@ -57,11 +57,29 @@ class ADBCapture(ScreenCapture):
       - Device connected and listed in `adb devices`
     """
 
+    # Known brew install paths for adb on macOS
+    _ADB_PATHS = [
+        "/opt/homebrew/bin/adb",   # Apple Silicon
+        "/usr/local/bin/adb",      # Intel Mac
+    ]
+
     def __init__(self, device_serial: Optional[str] = None) -> None:
         self._serial = device_serial
-        self._adb_args = ["adb"]
+        adb_bin = self._find_adb()
+        self._adb_args = [adb_bin]
         if device_serial:
             self._adb_args += ["-s", device_serial]
+
+    @classmethod
+    def _find_adb(cls) -> str:
+        """Return the adb binary path, checking brew locations if not on PATH."""
+        import shutil, os
+        if shutil.which("adb"):
+            return "adb"
+        for p in cls._ADB_PATHS:
+            if os.path.isfile(p):
+                return p
+        return "adb"  # let it fail with a clear error
 
     def is_available(self) -> bool:
         try:

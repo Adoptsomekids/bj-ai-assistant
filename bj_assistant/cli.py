@@ -66,17 +66,23 @@ def cli(ctx: click.Context, config: str, verbose: bool) -> None:
 @click.option("--serial", default=None, help="ADB device serial (optional)")
 @click.option("--fps", default=None, type=int, help="Capture FPS (default: from config)")
 @click.option("--auto-tap", is_flag=True, help="Enable ADB auto-tap (requires calibration)")
-@click.option("--no-overlay", is_flag=True, help="Disable HUD overlay")
+@click.option("--no-overlay", is_flag=True, help="Disable terminal HUD overlay")
+@click.option("--float-hud", is_flag=True, help="Use floating Tkinter window (if available)")
 @click.option("--decks", default=None, type=int, help="Number of decks in shoe")
+@click.option("-v", "--verbose", is_flag=True, help="Enable debug logging")
 @click.pass_context
-def run(ctx: click.Context, serial: str, fps: int, auto_tap: bool, no_overlay: bool, decks: int) -> None:
+def run(ctx: click.Context, serial: str, fps: int, auto_tap: bool,
+        no_overlay: bool, float_hud: bool, decks: int, verbose: bool) -> None:
     """Start the real-time BJ assistant."""
+    if verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
     s = ctx.obj["settings"]
     engine = BJEngine(
         device_serial=serial or s.device_serial,
         fps=fps or s.fps,
         auto_tap=auto_tap or s.auto_tap,
         show_overlay=not no_overlay and s.show_overlay,
+        use_tkinter=float_hud,
         decks=decks or s.decks,
     )
     console.print(Panel(

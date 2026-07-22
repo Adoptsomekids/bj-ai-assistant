@@ -41,12 +41,13 @@ class BJEngine:
         fps: int = 5,
         auto_tap: bool = False,
         show_overlay: bool = True,
+        use_tkinter: bool = False,
         decks: int = 6,
     ) -> None:
         self._capture = capture or get_best_capture(device_serial)
         self._detector = VegasBJDetector()
         self._counter = HiLoCounter(decks=decks)
-        self._overlay = HUDOverlay() if show_overlay else None
+        self._overlay = HUDOverlay(use_tkinter=use_tkinter) if show_overlay else None
         self._fps = fps
         self._auto_tap = auto_tap
         self._running = False
