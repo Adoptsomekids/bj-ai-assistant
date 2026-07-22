@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+*.png
+assets/card_templates/*.png
+config/settings.local.yaml
+*.log
+.DS_Store

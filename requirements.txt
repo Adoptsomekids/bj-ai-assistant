@@ -1,0 +1,10 @@
+opencv-python>=4.9.0
+numpy>=1.26.0
+Pillow>=10.3.0
+pytesseract>=0.3.10
+pure-python-adb>=0.3.0
+screeninfo>=0.8.1
+tkinter-tooltip>=2.1.0
+rich>=13.7.0
+click>=8.1.7
+pyyaml>=6.0.1

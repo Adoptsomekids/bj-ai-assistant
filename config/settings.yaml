@@ -1,0 +1,32 @@
+# BJ AI Assistant — Runtime Configuration
+# Copy this file and adjust values to your setup.
+
+# ─── Capture ────────────────────────────────────────────────────────────────
+device_serial: null        # null = auto-detect; or e.g. "192.168.1.5:5555"
+fps: 5                     # frames per second for capture loop
+capture_backend: "auto"    # "adb" | "scrcpy" | "macos" | "auto"
+
+# ─── Strategy ───────────────────────────────────────────────────────────────
+decks: 6                   # number of decks in the shoe
+allow_surrender: true
+allow_double: true
+allow_split: true
+
+# ─── HUD Overlay ────────────────────────────────────────────────────────────
+show_overlay: true
+overlay_x: 20              # screen X position of HUD window
+overlay_y: 20              # screen Y position of HUD window
+overlay_opacity: 0.92
+
+# ─── Auto-tap (EXPERIMENTAL) ────────────────────────────────────────────────
+# Enable ONLY after running `bj-assistant calibrate` and filling button_map.
+auto_tap: false
+button_map:
+  H: null    # [x, y] pixel coords of the HIT button   — set after calibration
+  S: null    # STAND
+  D: null    # DOUBLE DOWN
+  P: null    # SPLIT
+  R: null    # SURRENDER
+
+# ─── Logging ────────────────────────────────────────────────────────────────
+log_level: "INFO"          # DEBUG | INFO | WARNING | ERROR
