@@ -188,8 +188,15 @@ class VegasBJDetector:
         - 'betting'  — chip row visible, no cards → "Place Your Bet" or bet amount shown
         - 'playing'  — cards visible, action buttons present
         - 'result'   — "Dealer Wins" / "Player Wins" / "Push" overlay
+
+        Detection order:
+        1. Result overlay text (OCR middle band)
+        2. Action button COLOURS in the button strip (fast, no OCR — Stand=red,
+           Hit=green, Double=blue, Split=orange).  This fires even when OCR
+           can't read the button labels.
+        3. Action button TEXT via OCR (fallback)
         """
-        # Check for result overlay: look for large white text in middle band
+        # ── 1. Result overlay ────────────────────────────────────────────
         rx = int(Layout.RESULT_REGION_X * w)
         ry = int(Layout.RESULT_REGION_Y * h)
         rw = int(Layout.RESULT_REGION_W * w)
@@ -204,15 +211,46 @@ class VegasBJDetector:
         if any(kw in result_text for kw in RESULT_KEYWORDS):
             return "result"
 
-        # Check button row text — playing buttons have "Stand"/"Hit"/"Double"/"Split" labels
-        # Betting chip row has "250"/"500"/"1K" labels (no action words)
+        # ── 2. Button colour detection (primary playing indicator) ───────
+        # The action buttons have very distinctive HSV colours; OCR is not needed
+        # to know we are in a playing state.
+        if self._colour_buttons_visible(frame, w, h):
+            return "playing"
+
+        # ── 3. Button OCR fallback (in case colours are off) ────────────
         btn_strip = self._get_button_strip(frame, w, h)
         btn_text = self._ocr_text(btn_strip).lower()
+        log.debug("Button strip OCR: %r", btn_text)
         ACTION_WORDS = ("stand", "hit", "double", "split", "surrender")
         if any(word in btn_text for word in ACTION_WORDS):
             return "playing"
 
         return "betting"
+
+    def _colour_buttons_visible(self, frame: np.ndarray, w: int, h: int) -> bool:
+        """
+        Return True if at least TWO of the four action button colours are present
+        in the button strip.  Using ≥2 avoids false positives from stray coloured
+        pixels elsewhere on the table felt.
+        """
+        y1 = int(Layout.BUTTON_ROW_Y_TOP    * h)
+        y2 = int(Layout.BUTTON_ROW_Y_BOTTOM * h)
+        strip = frame[y1:y2, 0:w]
+        hsv = cv2.cvtColor(strip, cv2.COLOR_BGR2HSV)
+
+        found = 0
+        for name, (lo, hi) in Layout.BUTTON_COLOURS.items():
+            mask = cv2.inRange(hsv, np.array(lo), np.array(hi))
+            pixel_count = int(np.count_nonzero(mask))
+            # Require a minimum blob — at least ~0.3% of the strip area
+            min_pixels = max(100, int(strip.shape[0] * strip.shape[1] * 0.003))
+            if pixel_count >= min_pixels:
+                found += 1
+                log.debug("Button colour '%s': %d px (need %d)", name, pixel_count, min_pixels)
+            if found >= 2:
+                return True
+        log.debug("Colour check: only %d button colour(s) found (need ≥2)", found)
+        return False
 
     # ------------------------------------------------------------------
     # Score bubble OCR

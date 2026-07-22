@@ -182,6 +182,140 @@ def count(decks: int) -> None:
 # calibrate
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# debug-frame  — one-shot live frame diagnostic (text output, saves PNG)
+# ---------------------------------------------------------------------------
+
+@cli.command("debug-frame")
+@click.option("--serial", default=None, help="ADB device serial")
+@click.option("--out", default="/tmp/bj_debug_frame.png", show_default=True,
+              help="Where to save the annotated debug image")
+@click.option("--raw", default="/tmp/bj_raw_frame.png", show_default=True,
+              help="Where to save the raw (un-annotated) frame")
+@click.pass_context
+def debug_frame(ctx: click.Context, serial: str, out: str, raw: str) -> None:
+    """
+    Grab one live ADB frame, run the detector, print a full text report,
+    and save TWO PNG files:
+      --raw  the plain screenshot (open in Preview to see the live state)
+      --out  the annotated version with region boxes drawn on it
+
+    No images are displayed inline — open them manually in the Finder / Preview.
+    """
+    import cv2
+    import numpy as np
+    from .game_detector import VegasBJDetector, Layout
+
+    adb = ADBCapture(serial)
+    if not adb.is_available():
+        console.print("[red]No ADB device found. Connect phone via USB + USB Debugging.[/red]")
+        sys.exit(1)
+
+    console.print("[cyan]Grabbing frame from device…[/cyan]")
+    frame = adb.grab()
+    if frame is None:
+        console.print("[red]adb screencap returned None. Check USB connection.[/red]")
+        sys.exit(1)
+
+    h, w = frame.shape[:2]
+    console.print(f"  Frame size: [bold]{w}×{h}[/bold] px")
+
+    # ── Save raw ──────────────────────────────────────────────────────────
+    cv2.imwrite(raw, frame)
+    console.print(f"  Raw frame : [cyan]{raw}[/cyan]")
+
+    # ── Run detector ──────────────────────────────────────────────────────
+    detector = VegasBJDetector()
+    gf = detector.detect(frame)
+
+    # ── Print text report ─────────────────────────────────────────────────
+    table = Table(title="Frame Detection Report", show_header=True,
+                  header_style="bold magenta")
+    table.add_column("Field", style="dim", min_width=20)
+    table.add_column("Value", style="bold")
+
+    state_colour = {"playing": "green", "result": "yellow",
+                    "betting": "red", "unknown": "dim"}.get(gf.game_state, "white")
+    table.add_row("game_state",
+                  f"[{state_colour}]{gf.game_state}[/{state_colour}]")
+    table.add_row("dealer_total",    str(gf.dealer_total))
+    table.add_row("player_total",    str(gf.player_total))
+    table.add_row("is_soft",         str(gf.is_soft))
+    table.add_row("dealer_upcard",   str(gf.dealer_upcard_rank))
+    table.add_row("player_ranks",    str(gf.player_card_ranks))
+    table.add_row("buttons_found",   str(list(gf.buttons.keys())))
+    table.add_row("is_actionable",   str(gf.is_actionable))
+
+    # Colour pixel counts for each button (helps tune HSV ranges)
+    strip_y1 = int(Layout.BUTTON_ROW_Y_TOP * h)
+    strip_y2 = int(Layout.BUTTON_ROW_Y_BOTTOM * h)
+    strip = frame[strip_y1:strip_y2, 0:w]
+    hsv_strip = cv2.cvtColor(strip, cv2.COLOR_BGR2HSV)
+    for btn_name, (lo, hi) in Layout.BUTTON_COLOURS.items():
+        mask = cv2.inRange(hsv_strip, np.array(lo), np.array(hi))
+        px = int(np.count_nonzero(mask))
+        table.add_row(f"colour_{btn_name.lower()}_px", str(px))
+
+    console.print(table)
+
+    # ── Build annotated image (bounding boxes of the detector regions) ────
+    vis = frame.copy()
+
+    def _box(x1, y1, x2, y2, colour, label):
+        cv2.rectangle(vis, (x1, y1), (x2, y2), colour, 3)
+        cv2.putText(vis, label, (x1, max(0, y1 - 6)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, colour, 2)
+
+    # Result region
+    _box(int(Layout.RESULT_REGION_X * w),
+         int(Layout.RESULT_REGION_Y * h),
+         int((Layout.RESULT_REGION_X + Layout.RESULT_REGION_W) * w),
+         int((Layout.RESULT_REGION_Y + Layout.RESULT_REGION_H) * h),
+         (0, 255, 255), "result_rgn")
+
+    # Dealer bubble
+    dbx = int(Layout.DEALER_BUBBLE_CX * w)
+    dby = int(Layout.DEALER_BUBBLE_CY * h)
+    dbr = int(Layout.DEALER_BUBBLE_R  * w)
+    _box(dbx - dbr, dby - dbr, dbx + dbr, dby + dbr, (255, 0, 255), "dealer_bubble")
+
+    # Player bubble
+    pbx = int(Layout.PLAYER_BUBBLE_CX * w)
+    pby = int(Layout.PLAYER_BUBBLE_CY * h)
+    pbr = int(Layout.PLAYER_BUBBLE_R  * w)
+    _box(pbx - pbr, pby - pbr, pbx + pbr, pby + pbr, (0, 255, 0), "player_bubble")
+
+    # Button strip
+    _box(0, strip_y1, w, strip_y2, (0, 165, 255), "btn_strip")
+
+    # Dealer card rank region
+    _box(int(Layout.DEALER_CARD_RANK_X * w),
+         int(Layout.DEALER_CARD_RANK_Y * h),
+         int((Layout.DEALER_CARD_RANK_X + Layout.DEALER_CARD_RANK_W) * w),
+         int((Layout.DEALER_CARD_RANK_Y + Layout.DEALER_CARD_RANK_H) * h),
+         (255, 128, 0), "dealer_rank")
+
+    # Player card rank region
+    _box(int(Layout.PLAYER_CARD_RANK_X * w),
+         int(Layout.PLAYER_CARD_RANK_Y * h),
+         int((Layout.PLAYER_CARD_RANK_X + Layout.PLAYER_CARD_RANK_W) * w),
+         int((Layout.PLAYER_CARD_RANK_Y + Layout.PLAYER_CARD_RANK_H) * h),
+         (128, 255, 0), "player_rank")
+
+    # Detected buttons
+    for btn_name, (bx, by) in gf.buttons.items():
+        cv2.drawMarker(vis, (bx, by), (0, 0, 255),
+                       cv2.MARKER_CROSS, 40, 4)
+        cv2.putText(vis, btn_name, (bx + 15, by),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+
+    cv2.imwrite(out, vis)
+    console.print(f"\n  Annotated : [cyan]{out}[/cyan]")
+    console.print("\n[dim]Open those PNG files in Preview/Finder to inspect.[/dim]")
+    console.print("[dim]Run with -v on the CLI group for full DEBUG logs:[/dim]")
+    console.print("[dim]  bj-assistant -v debug-frame[/dim]\n")
+
+
 @cli.command()
 @click.option("--serial", default=None, help="ADB device serial")
 def calibrate(serial: str) -> None:
