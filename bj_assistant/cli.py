@@ -246,7 +246,7 @@ def debug_frame(ctx: click.Context, serial: str, out: str, raw: str) -> None:
     table.add_row("buttons_found",   str(list(gf.buttons.keys())))
     table.add_row("is_actionable",   str(gf.is_actionable))
 
-    # Colour pixel counts for each button (helps tune HSV ranges)
+    # Colour pixel counts for button strip diagnostics
     strip_y1 = int(Layout.BUTTON_ROW_Y_TOP * h)
     strip_y2 = int(Layout.BUTTON_ROW_Y_BOTTOM * h)
     strip = frame[strip_y1:strip_y2, 0:w]
@@ -255,6 +255,13 @@ def debug_frame(ctx: click.Context, serial: str, out: str, raw: str) -> None:
         mask = cv2.inRange(hsv_strip, np.array(lo), np.array(hi))
         px = int(np.count_nonzero(mask))
         table.add_row(f"colour_{btn_name.lower()}_px", str(px))
+    # The KEY discriminator: Hit bright-green (≥3000 = playing, <3000 = betting/result)
+    hit_bright = cv2.inRange(hsv_strip,
+                             np.array([45, 150, 150]), np.array([90, 255, 255]))
+    hit_bright_px = int(np.count_nonzero(hit_bright))
+    threshold_note = "✅ PLAYING" if hit_bright_px >= 3000 else "⛔ betting/result"
+    table.add_row("hit_bright_green_px",
+                  f"{hit_bright_px}  ← {threshold_note} (threshold=3000)")
 
     console.print(table)
 

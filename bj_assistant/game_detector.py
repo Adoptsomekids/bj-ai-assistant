@@ -229,28 +229,28 @@ class VegasBJDetector:
 
     def _colour_buttons_visible(self, frame: np.ndarray, w: int, h: int) -> bool:
         """
-        Return True if at least TWO of the four action button colours are present
-        in the button strip.  Using ≥2 avoids false positives from stray coloured
-        pixels elsewhere on the table felt.
+        Return True when the action-button row is visible (playing state).
+
+        The Hit button's bright green (HSV hue 45–90, sat>150, val>150) is the
+        definitive discriminator:
+          - Playing:  Hit button present  → ≥3 000 px of bright green in the strip
+          - Betting:  chip row present    → 0–5 px of bright green (500-chip is
+                      teal/muted, hue≈101, val≈127 — outside this range)
+          - Result:   no action buttons   → 0 px
+
+        This fires reliably across all 5 test screenshots and the live frame.
         """
         y1 = int(Layout.BUTTON_ROW_Y_TOP    * h)
         y2 = int(Layout.BUTTON_ROW_Y_BOTTOM * h)
         strip = frame[y1:y2, 0:w]
         hsv = cv2.cvtColor(strip, cv2.COLOR_BGR2HSV)
 
-        found = 0
-        for name, (lo, hi) in Layout.BUTTON_COLOURS.items():
-            mask = cv2.inRange(hsv, np.array(lo), np.array(hi))
-            pixel_count = int(np.count_nonzero(mask))
-            # Require a minimum blob — at least ~0.3% of the strip area
-            min_pixels = max(100, int(strip.shape[0] * strip.shape[1] * 0.003))
-            if pixel_count >= min_pixels:
-                found += 1
-                log.debug("Button colour '%s': %d px (need %d)", name, pixel_count, min_pixels)
-            if found >= 2:
-                return True
-        log.debug("Colour check: only %d button colour(s) found (need ≥2)", found)
-        return False
+        # Bright green = Hit button; absent from both the chip row and result screen
+        hit_green_lo = np.array([45, 150, 150])
+        hit_green_hi = np.array([90, 255, 255])
+        hit_px = int(np.count_nonzero(cv2.inRange(hsv, hit_green_lo, hit_green_hi)))
+        log.debug("Hit bright-green pixels in btn strip: %d", hit_px)
+        return hit_px >= 3000
 
     # ------------------------------------------------------------------
     # Score bubble OCR
