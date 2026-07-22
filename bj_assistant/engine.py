@@ -135,7 +135,8 @@ class BJEngine:
         if not gf.is_actionable:
             return  # not enough info yet
 
-        dealer_upcard = gf.dealer_upcard_rank
+        # Use rank OCR result if available; fall back to bubble total as upcard
+        dealer_upcard = gf.effective_dealer_upcard
         player_total  = gf.player_total
         is_soft       = gf.is_soft
 
@@ -156,9 +157,22 @@ class BJEngine:
             self._hand_counted = True
 
         # ── Strategy decision ────────────────────────────────────────
-        # Build synthetic player_cards list from total + soft flag
-        # so we can feed the strategy engine (it needs ranks for pair detection)
-        player_cards = gf.player_card_ranks if gf.player_card_ranks else [str(player_total)]
+        # Build player_cards for the strategy engine.
+        # If card-rank OCR gave us actual ranks, use those.
+        # Otherwise build a minimal synthetic hand from the bubble total so that
+        # hand_total() returns the correct value:
+        #   - soft total → ["A", str(total - 11)]   e.g. soft 18 → ["A","7"]
+        #   - hard total → ["10", str(total - 10)]  e.g. hard 16 → ["10","6"]
+        #     clamped so both components are valid rank strings (2-10 or A)
+        if gf.player_card_ranks:
+            player_cards = gf.player_card_ranks
+        elif is_soft and 12 <= player_total <= 21:
+            player_cards = ["A", str(player_total - 11)]
+        else:
+            # Hard total: split into two components that hand_total() can parse
+            low = max(2, player_total - 10)
+            high = player_total - low
+            player_cards = [str(high), str(low)]
 
         state = GameState(
             player_cards=player_cards,

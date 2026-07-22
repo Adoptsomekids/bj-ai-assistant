@@ -100,10 +100,28 @@ class GameFrame:
     frame_h: int                      = 1560
 
     @property
+    def effective_dealer_upcard(self) -> Optional[str]:
+        """
+        Return the best available dealer upcard identifier:
+          1. dealer_upcard_rank if OCR succeeded (e.g. "J", "A", "6")
+          2. str(dealer_total) if bubble OCR gave us the total (e.g. "6", "10")
+          3. None if neither is available
+        """
+        if self.dealer_upcard_rank is not None:
+            return self.dealer_upcard_rank
+        if self.dealer_total is not None:
+            # Clamp to strategy-table range: 2–10, A
+            t = self.dealer_total
+            if t >= 10:
+                return "10"
+            return str(t)
+        return None
+
+    @property
     def is_actionable(self) -> bool:
         """True when we have enough info to make a strategy decision."""
         return (
-            self.dealer_upcard_rank is not None
+            self.effective_dealer_upcard is not None
             and self.player_total is not None
             and self.game_state == "playing"
         )
