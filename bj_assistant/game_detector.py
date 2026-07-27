@@ -381,66 +381,81 @@ class VegasBJDetector:
         top-left corner where the rank character lives.
         """
         if role == "dealer":
-            # Dealer card is ABOVE the dealer bubble (cy≈0.186).
-            # Scan from y=9% to y=22% (above bubble).
+            # Dealer zone: y=9%–35% covers both cards (bubble at 18.6%)
             scan_y1 = int(0.09 * h)
-            scan_y2 = int(0.22 * h)
+            scan_y2 = int(0.35 * h)
         else:
-            # Player cards are ABOVE the player bubble (cy≈0.708).
-            # Scan from y=32% to y=66%.
+            # Player zone: y=32%–70% covers player cards (bubble at 70.8%)
             scan_y1 = int(0.32 * h)
-            scan_y2 = int(0.66 * h)
+            scan_y2 = int(0.70 * h)
 
         zone = frame[scan_y1:scan_y2, 0:w]
         gray = cv2.cvtColor(zone, cv2.COLOR_BGR2GRAY)
-        # Cards are bright white (>200 brightness) on a dark felt table
+        # Cards are bright white (>200) on the dark felt
         _, white_mask = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
         contours, _ = cv2.findContours(white_mask, cv2.RETR_EXTERNAL,
                                        cv2.CHAIN_APPROX_SIMPLE)
 
-        # Find the largest card-like white region
-        best = None
+        # Collect individual card-like white regions:
+        #   - area 8 000–150 000 (single card, not the merged pile)
+        #   - not touching left edge (x==0 = back of hidden card)
+        #   - not touching right/UI area (x > 88% = gear icon)
+        candidates = []
+        max_single_card = int(0.20 * w * (scan_y2 - scan_y1))  # no bigger than 20% of zone
         for cnt in contours:
             x, y, cw, ch = cv2.boundingRect(cnt)
             area = cw * ch
             aspect = cw / max(ch, 1)
-            if area < 3000:
+            if area < 8000 or area > max_single_card:
                 continue
-            # Card shape: portrait or near-square, not too thin horizontally
-            if not (0.2 < aspect < 2.0):
+            if not (0.3 < aspect < 3.0):
                 continue
-            if best is None or area > best[4]:
-                best = (x, y, cw, ch, area)
+            if x == 0 or x > int(0.88 * w):
+                continue
+            candidates.append((x, y, cw, ch, area))
 
-        if best is None:
-            log.debug("_read_card_rank(%s): no white card region found", role)
+        if not candidates:
+            log.debug("_read_card_rank(%s): no card candidate found in %d contours",
+                      role, len(contours))
             return None
 
-        cx, cy, ccw, cch, _ = best
-        # Rank text is in top-left 25%×25% of the card
-        rank_w = max(20, int(ccw * 0.30))
-        rank_h = max(15, int(cch * 0.25))
-        rx1 = cx
-        ry1 = cy
-        rx2 = min(zone.shape[1], cx + rank_w)
-        ry2 = min(zone.shape[0], cy + rank_h)
-        roi = zone[ry1:ry2, rx1:rx2]
+        # Dealer: face-up card is typically the rightmost (visible) → sort by x desc
+        # Player: first card is leftmost → sort by x asc
+        candidates.sort(key=lambda r: r[0], reverse=(role == "dealer"))
+        cx, cy, ccw, cch, best_area = candidates[0]
+
+        # Rank text is in the top-left corner of the card
+        rank_w = max(25, int(ccw * 0.28))
+        rank_h = max(20, int(cch * 0.22))
+        roi = zone[cy:cy+rank_h, cx:cx+rank_w]
         if roi.size == 0:
             return None
 
         gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-        _, thresh = cv2.threshold(gray_roi, 100, 255, cv2.THRESH_BINARY_INV)
-        big = cv2.resize(thresh, None, fx=6, fy=6, interpolation=cv2.INTER_CUBIC)
+        # Invert: card is white with dark rank text → black on white for Tesseract
+        _, thresh = cv2.threshold(gray_roi, 128, 255, cv2.THRESH_BINARY_INV)
+        big = cv2.resize(thresh, None, fx=8, fy=8, interpolation=cv2.INTER_CUBIC)
         big = cv2.copyMakeBorder(big, 20, 20, 20, 20, cv2.BORDER_CONSTANT, value=255)
 
         text = self._ocr_ranks(big).strip().upper()
         text = re.sub(r"[^A-Z0-9]", "", text)
-        rank_map = {"T": "10", "1": "A", "O": "0", "I": "1", "L": "1"}
+        # Normalise common Tesseract misreads for card ranks
+        rank_map = {
+            "T": "10",  # T → 10 (ten)
+            "1": "A",   # 1 → Ace
+            "O": "0",   # O → 0 (but "10" stays "10")
+            "I": "1",   # I → 1 → Ace via next pass
+            "L": "1",
+            "G": "9",   # G misread of 9
+        }
         text = rank_map.get(text, text)
+        # Second pass for I→1→A
+        if text == "1":
+            text = "A"
         valid = {"A","2","3","4","5","6","7","8","9","10","J","Q","K"}
         result = text if text in valid else None
-        log.debug("_read_card_rank(%s): zone=%d-%d best_area=%d text=%r → %s",
-                  role, scan_y1, scan_y2, best[4], text, result)
+        log.debug("_read_card_rank(%s): zone=%d-%d candidates=%d best=(%d,%d,%d,%d) text=%r → %s",
+                  role, scan_y1, scan_y2, len(candidates), cx, cy, ccw, cch, text, result)
         return result
 
     def _read_player_ranks(self, frame: np.ndarray, w: int, h: int) -> List[str]:
