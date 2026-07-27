@@ -35,49 +35,80 @@ log = logging.getLogger(__name__)
 
 class Layout:
     # Score bubbles  (cx, cy, radius) — all fractions
-    # Pixel-measured on 1080×2340 screenshots:
-    #   Dealer bubble dark region: x=492-588, y=379-494 → centre (540, 436)
-    #   Player bubble dark region: x=490-590, y=1597-1718 → centre (540, 1657)
+    # Pixel-measured on 1080×2340 live frame (debug-frame verified 2026-07-27):
+    #   Dealer bubble centre ≈ (362, 284) on 720×1560 scaled → (540, 436) on 1080×2340
+    #   Player bubble centre ≈ (362, 1113) on 720×1560 → (540, 1658) on 1080×2340
     DEALER_BUBBLE_CX  = 0.500
     DEALER_BUBBLE_CY  = 0.186   # 436 / 2340
     DEALER_BUBBLE_R   = 0.048   # ~52px radius
 
     PLAYER_BUBBLE_CX  = 0.500
-    PLAYER_BUBBLE_CY  = 0.708   # 1657 / 2340
+    PLAYER_BUBBLE_CY  = 0.708   # 1658 / 2340
     PLAYER_BUBBLE_R   = 0.048
 
-    # Card rank top-left corner crops
-    # Dealer top card rank ≈ x=230, y=500, w=75, h=60  (on 1080×2340)
-    DEALER_CARD_RANK_X = 0.213
-    DEALER_CARD_RANK_Y = 0.214
-    DEALER_CARD_RANK_W = 0.090
-    DEALER_CARD_RANK_H = 0.030
+    # Card rank top-left corner crops — verified against debug-frame 2026-07-27
+    # On 1080×2340: dealer Q visible at approx x=240, y=360  (card top-left corner)
+    #   rank text is in top-left ~15% of card, card width≈240px, height≈320px
+    #   so rank region ≈ x=240-310, y=360-420 → fracs: x=0.222, y=0.154, w=0.065, h=0.026
+    DEALER_CARD_RANK_X = 0.222
+    DEALER_CARD_RANK_Y = 0.154
+    DEALER_CARD_RANK_W = 0.065
+    DEALER_CARD_RANK_H = 0.028
 
-    # Player first card rank ≈ x=230, y=1200
-    PLAYER_CARD_RANK_X = 0.213
-    PLAYER_CARD_RANK_Y = 0.513
-    PLAYER_CARD_RANK_W = 0.090
-    PLAYER_CARD_RANK_H = 0.030
+    # Player cards visible at approx x=265, y=788 (9♠ top-left) on 1080×2340
+    #   rank region ≈ x=265-335, y=788-848 → fracs: x=0.245, y=0.337, w=0.065, h=0.026
+    PLAYER_CARD_RANK_X = 0.245
+    PLAYER_CARD_RANK_Y = 0.337
+    PLAYER_CARD_RANK_W = 0.065
+    PLAYER_CARD_RANK_H = 0.028
 
-    # Buttons row — measured on 1080×2340:
-    #   Stand/Hit/Double/Split row top ≈ y=2060, bottom ≈ y=2220
-    BUTTON_ROW_Y_TOP    = 0.880   # ≈ 2059 / 2340
-    BUTTON_ROW_Y_BOTTOM = 0.960   # ≈ 2246 / 2340
+    # Buttons row — verified on debug-frame: Stand/Double/Hit at y≈2050–2220
+    BUTTON_ROW_Y_TOP    = 0.877   # ≈ 2052 / 2340
+    BUTTON_ROW_Y_BOTTOM = 0.962   # ≈ 2251 / 2340
 
-    # Colour ranges (HSV) for each button type
-    # Measured from screenshots with colour picker (1080×2340 source)
+    # Colour ranges (HSV) for each action button type + minimum pixel count per button.
+    # Min px calibrated from debug-frame 2026-07-27 on 1080×2340:
+    #   Stand  21460px  Double 20928px  (large coloured buttons)
+    #   Hit      675px  (small green arrow — low threshold)
+    #   Split  10706px  when NOT present this came from chip 1K edge
+    #             → raise Split min to 15000 to reject chip bleed
     BUTTON_COLOURS = {
-        "Stand":  ((0,   100, 80),  (12,  255, 255)),   # red
-        "Hit":    ((50,  60,  80),  (90,  255, 255)),    # green (triangle icon)
-        "Double": ((95,  80,  80),  (135, 255, 255)),    # blue
-        "Split":  ((12,  100, 80),  (28,  255, 255)),    # orange
+        #         HSV_lo              HSV_hi          min_px
+        "Stand":  ((0,   100, 80),  (12,  255, 255), 5000),   # red   large btn
+        "Hit":    ((50,  60,  80),  (90,  255, 255),  400),   # green small arrow
+        "Double": ((95,  80,  80),  (135, 255, 255), 5000),   # blue  large btn
+        "Split":  ((12,  100, 80),  (28,  255, 255), 15000),  # orange — chip bleed <10706
     }
 
+    # Chip betting row — in the app the betting chips appear in the SAME y-band
+    # as the action buttons. During betting there are 5 chip denominations.
+    # We detect chips in a WIDER vertical band that includes both the chip row
+    # and a narrow zone above it where the current-bet chip is displayed.
+    # Chip zone: y = 75%–96% of screen height
+    CHIP_ROW_Y_TOP    = 0.750
+    CHIP_ROW_Y_BOTTOM = 0.962
+    # 5 chip positions (x fractions) — evenly spaced in the app
+    CHIP_X_FRACS = [0.10, 0.27, 0.45, 0.63, 0.82]
+    CHIP_VALUES  = [5, 25, 100, 500, 1000]
+
     # Game state detection — result overlay text region
+    # IMPORTANT: must NOT overlap the permanent felt text:
+    #   "BLACKJACK PAYS 3 TO 2"  at y≈27%–30%
+    #   "Dealer Must Stand Soft 17"  at y≈30%–33%
+    # Result banners ("Dealer Wins", "You Win", etc.) appear at y≈18%–26%
     RESULT_REGION_X = 0.05
-    RESULT_REGION_Y = 0.38
+    RESULT_REGION_Y = 0.18   # was 0.38 — moved UP to avoid felt text
     RESULT_REGION_W = 0.90
-    RESULT_REGION_H = 0.12
+    RESULT_REGION_H = 0.10   # tight band: only the result banner area
+
+    # Deal / New Round button — appears after result or on betting screen
+    # In the app it is a large green button at bottom center
+    DEAL_BTN_Y_TOP    = 0.877
+    DEAL_BTN_Y_BOTTOM = 0.962
+    DEAL_BTN_X_LEFT   = 0.25
+    DEAL_BTN_X_RIGHT  = 0.75
+    DEAL_BTN_COLOUR_LO = (45, 80, 80)
+    DEAL_BTN_COLOUR_HI = (90, 255, 255)
 
 
 # ---------------------------------------------------------------------------
@@ -87,17 +118,20 @@ class Layout:
 @dataclass
 class GameFrame:
     """Parsed state extracted from a single captured frame."""
-    dealer_total: Optional[int]       = None   # from bubble OCR
-    player_total: Optional[int]       = None   # from bubble OCR
-    is_soft: bool                     = False  # ace in player hand
-    dealer_upcard_rank: Optional[str] = None   # OCR'd from top card
-    player_card_ranks: List[str]      = field(default_factory=list)
+    dealer_total: Optional[int]        = None   # from bubble OCR
+    player_total: Optional[int]        = None   # from bubble OCR
+    is_soft: bool                      = False  # ace in player hand
+    dealer_upcard_rank: Optional[str]  = None   # OCR'd from top card
+    player_card_ranks: List[str]       = field(default_factory=list)
     buttons: dict[str, Tuple[int,int]] = field(default_factory=dict)
-    # buttons = {"Stand": (cx,cy), "Hit": (cx,cy), ...}
-    game_state: str                   = "unknown"
+    # buttons = {"Stand":(cx,cy), "Hit":(cx,cy), ...} during playing phase
+    chips: dict[int, Tuple[int,int]]   = field(default_factory=dict)
+    # chips = {5:(cx,cy), 25:(cx,cy), 100:(cx,cy), ...} during betting phase
+    deal_btn: Optional[Tuple[int,int]] = None   # coords of Deal/New-round button
+    game_state: str                    = "unknown"
     # "betting" | "playing" | "result" | "unknown"
-    frame_w: int                      = 720
-    frame_h: int                      = 1560
+    frame_w: int                       = 720
+    frame_h: int                       = 1560
 
     @property
     def effective_dealer_upcard(self) -> Optional[str]:
@@ -188,11 +222,16 @@ class VegasBJDetector:
         if gf.game_state == "playing":
             gf.buttons = self._detect_buttons(frame, w, h)
 
+        if gf.game_state in ("betting", "result"):
+            gf.chips    = self._detect_chips(frame, w, h)
+            gf.deal_btn = self._detect_deal_button(frame, w, h)
+
         log.debug(
-            "Frame: state=%s dealer=%s player=%s(%s) upcard=%s btns=%s",
+            "Frame: state=%s dealer=%s player=%s(%s) upcard=%s btns=%s chips=%s",
             gf.game_state, gf.dealer_total, gf.player_total,
             "soft" if gf.is_soft else "hard",
-            gf.dealer_upcard_rank, list(gf.buttons.keys())
+            gf.dealer_upcard_rank, list(gf.buttons.keys()),
+            list(gf.chips.keys())
         )
         return gf
 
@@ -263,12 +302,24 @@ class VegasBJDetector:
         strip = frame[y1:y2, 0:w]
         hsv = cv2.cvtColor(strip, cv2.COLOR_BGR2HSV)
 
-        # Bright green = Hit button; absent from both the chip row and result screen
+        # Primary indicator: bright-green Hit button (≥3000px = playing)
         hit_green_lo = np.array([45, 150, 150])
         hit_green_hi = np.array([90, 255, 255])
         hit_px = int(np.count_nonzero(cv2.inRange(hsv, hit_green_lo, hit_green_hi)))
-        log.debug("Hit bright-green pixels in btn strip: %d", hit_px)
-        return hit_px >= 3000
+        if hit_px >= 3000:
+            log.debug("Hit bright-green px=%d → playing", hit_px)
+            return True
+
+        # Fallback: Hit small arrow (≥400px at lower saturation threshold)
+        _, _, min_px_hit = Layout.BUTTON_COLOURS["Hit"]
+        lo_h, hi_h, _ = Layout.BUTTON_COLOURS["Hit"]
+        any_hit_px = int(np.count_nonzero(cv2.inRange(hsv, np.array(lo_h), np.array(hi_h))))
+        if any_hit_px >= min_px_hit:
+            log.debug("Hit green (relaxed) px=%d → playing", any_hit_px)
+            return True
+
+        log.debug("Hit bright-green px=%d, relaxed px=%d → not playing", hit_px, any_hit_px)
+        return False
 
     # ------------------------------------------------------------------
     # Score bubble OCR
@@ -322,33 +373,75 @@ class VegasBJDetector:
     # ------------------------------------------------------------------
 
     def _read_card_rank(self, frame: np.ndarray, w: int, h: int, role: str) -> Optional[str]:
-        """Read the rank character from the top-left corner of the top visible card."""
-        if role == "dealer":
-            x = int(Layout.DEALER_CARD_RANK_X * w)
-            y = int(Layout.DEALER_CARD_RANK_Y * h)
-            cw = int(Layout.DEALER_CARD_RANK_W * w)
-            ch = int(Layout.DEALER_CARD_RANK_H * h)
-        else:
-            x = int(Layout.PLAYER_CARD_RANK_X * w)
-            y = int(Layout.PLAYER_CARD_RANK_Y * h)
-            cw = int(Layout.PLAYER_CARD_RANK_W * w)
-            ch = int(Layout.PLAYER_CARD_RANK_H * h)
+        """
+        Read the rank from the top-left corner of the top face-up card.
 
-        roi = frame[y:y+ch, x:x+cw]
-        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-        # Cards are white with dark rank text
-        _, thresh = cv2.threshold(gray, 100, 255, cv2.THRESH_BINARY_INV)
-        big = cv2.resize(thresh, None, fx=5, fy=5, interpolation=cv2.INTER_CUBIC)
+        Strategy: scan a horizontal band above (dealer) or below (player) the
+        score bubble to find the leftmost white card region, then OCR its
+        top-left corner where the rank character lives.
+        """
+        if role == "dealer":
+            # Dealer card is ABOVE the dealer bubble (cy≈0.186).
+            # Scan from y=9% to y=22% (above bubble).
+            scan_y1 = int(0.09 * h)
+            scan_y2 = int(0.22 * h)
+        else:
+            # Player cards are ABOVE the player bubble (cy≈0.708).
+            # Scan from y=32% to y=66%.
+            scan_y1 = int(0.32 * h)
+            scan_y2 = int(0.66 * h)
+
+        zone = frame[scan_y1:scan_y2, 0:w]
+        gray = cv2.cvtColor(zone, cv2.COLOR_BGR2GRAY)
+        # Cards are bright white (>200 brightness) on a dark felt table
+        _, white_mask = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
+        contours, _ = cv2.findContours(white_mask, cv2.RETR_EXTERNAL,
+                                       cv2.CHAIN_APPROX_SIMPLE)
+
+        # Find the largest card-like white region
+        best = None
+        for cnt in contours:
+            x, y, cw, ch = cv2.boundingRect(cnt)
+            area = cw * ch
+            aspect = cw / max(ch, 1)
+            if area < 3000:
+                continue
+            # Card shape: portrait or near-square, not too thin horizontally
+            if not (0.2 < aspect < 2.0):
+                continue
+            if best is None or area > best[4]:
+                best = (x, y, cw, ch, area)
+
+        if best is None:
+            log.debug("_read_card_rank(%s): no white card region found", role)
+            return None
+
+        cx, cy, ccw, cch, _ = best
+        # Rank text is in top-left 25%×25% of the card
+        rank_w = max(20, int(ccw * 0.30))
+        rank_h = max(15, int(cch * 0.25))
+        rx1 = cx
+        ry1 = cy
+        rx2 = min(zone.shape[1], cx + rank_w)
+        ry2 = min(zone.shape[0], cy + rank_h)
+        roi = zone[ry1:ry2, rx1:rx2]
+        if roi.size == 0:
+            return None
+
+        gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        _, thresh = cv2.threshold(gray_roi, 100, 255, cv2.THRESH_BINARY_INV)
+        big = cv2.resize(thresh, None, fx=6, fy=6, interpolation=cv2.INTER_CUBIC)
+        big = cv2.copyMakeBorder(big, 20, 20, 20, 20, cv2.BORDER_CONSTANT, value=255)
 
         text = self._ocr_ranks(big).strip().upper()
         text = re.sub(r"[^A-Z0-9]", "", text)
-
-        # Normalise common OCR errors
-        rank_map = {"T": "10", "1": "A", "O": "0", "I": "1"}
+        rank_map = {"T": "10", "1": "A", "O": "0", "I": "1", "L": "1"}
         text = rank_map.get(text, text)
-
         valid = {"A","2","3","4","5","6","7","8","9","10","J","Q","K"}
-        return text if text in valid else None
+        result = text if text in valid else None
+        log.debug("_read_card_rank(%s): zone=%d-%d best_area=%d text=%r → %s",
+                  role, scan_y1, scan_y2, best[4], text, result)
+        return result
 
     def _read_player_ranks(self, frame: np.ndarray, w: int, h: int) -> List[str]:
         """
@@ -402,6 +495,77 @@ class VegasBJDetector:
         return "A" in [r.upper() for r in ranks]
 
     # ------------------------------------------------------------------
+    # Chip detection (betting phase)
+    # ------------------------------------------------------------------
+
+    def _detect_chips(
+        self, frame: np.ndarray, w: int, h: int
+    ) -> "dict[int, Tuple[int,int]]":
+        """
+        Detect betting chips in the button-row band.
+        Returns {chip_value: (cx, cy)} for each chip found.
+
+        Strategy: chips sit at known fractional x positions.
+        We probe a small column around each expected x and look for
+        the gold/amber colour that all Vegas BJ chips share.
+        """
+        y1 = int(Layout.CHIP_ROW_Y_TOP    * h)
+        y2 = int(Layout.CHIP_ROW_Y_BOTTOM * h)
+        strip = frame[y1:y2, 0:w]
+        hsv   = cv2.cvtColor(strip, cv2.COLOR_BGR2HSV)
+
+        # Gold/amber range covers all chip denominations
+        gold_lo = np.array([15, 80, 80])
+        gold_hi = np.array([40, 255, 255])
+        gold_mask = cv2.inRange(hsv, gold_lo, gold_hi)
+
+        chips: dict[int, Tuple[int, int]] = {}
+        col_w = max(1, int(w * 0.08))   # probe ±4% around each expected x
+
+        for frac, value in zip(Layout.CHIP_X_FRACS, Layout.CHIP_VALUES):
+            cx_exp = int(frac * w)
+            x1c = max(0, cx_exp - col_w)
+            x2c = min(w, cx_exp + col_w)
+            col_mask = gold_mask[:, x1c:x2c]
+            px = int(np.count_nonzero(col_mask))
+            if px >= 200:   # at least 200 gold pixels → chip present
+                # find centroid
+                ys, xs = np.where(col_mask > 0)
+                cx = x1c + int(np.mean(xs)) if len(xs) else cx_exp
+                cy = y1 + int(np.mean(ys)) if len(ys) else (y1 + y2) // 2
+                chips[value] = (cx, cy)
+                log.debug("Chip %d detected at (%d,%d) px=%d", value, cx, cy, px)
+
+        return chips
+
+    def _detect_deal_button(
+        self, frame: np.ndarray, w: int, h: int
+    ) -> "Optional[Tuple[int,int]]":
+        """
+        Detect the Deal / New Round button that appears after a hand ends.
+        Returns (cx, cy) of the button centre, or None.
+        """
+        y1 = int(Layout.DEAL_BTN_Y_TOP    * h)
+        y2 = int(Layout.DEAL_BTN_Y_BOTTOM * h)
+        x1 = int(Layout.DEAL_BTN_X_LEFT   * w)
+        x2 = int(Layout.DEAL_BTN_X_RIGHT  * w)
+        roi  = frame[y1:y2, x1:x2]
+        hsv  = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+
+        lo = np.array(Layout.DEAL_BTN_COLOUR_LO)
+        hi = np.array(Layout.DEAL_BTN_COLOUR_HI)
+        mask = cv2.inRange(hsv, lo, hi)
+        px   = int(np.count_nonzero(mask))
+
+        if px >= 2000:
+            ys, xs = np.where(mask > 0)
+            cx = x1 + int(np.mean(xs))
+            cy = y1 + int(np.mean(ys))
+            log.debug("Deal button detected at (%d,%d) px=%d", cx, cy, px)
+            return (cx, cy)
+        return None
+
+    # ------------------------------------------------------------------
     # Button detection
     # ------------------------------------------------------------------
 
@@ -423,21 +587,25 @@ class VegasBJDetector:
         hsv = cv2.cvtColor(strip, cv2.COLOR_BGR2HSV)
 
         buttons: dict[str, Tuple[int,int]] = {}
-        for name, (lo, hi) in Layout.BUTTON_COLOURS.items():
+
+        for name, (lo, hi, min_px) in Layout.BUTTON_COLOURS.items():
             mask = cv2.inRange(hsv, np.array(lo), np.array(hi))
-            # Morphological close to merge nearby pixels
+            total_px = int(np.count_nonzero(mask))
+            # First gate: must have enough pixels of this colour
+            if total_px < min_px:
+                log.debug("Button %s: %d px < min %d → absent", name, total_px, min_px)
+                continue
             kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
             mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
             contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            contours = sorted(contours, key=cv2.contourArea, reverse=True)
             for cnt in contours:
-                area = cv2.contourArea(cnt)
-                if area < 300:
-                    continue
                 bx, by, bw, bh = cv2.boundingRect(cnt)
                 cx = bx + bw // 2
                 cy = y1 + by + bh // 2  # back to full-frame coords
                 buttons[name] = (cx, cy)
-                break  # take the largest match per colour
+                log.debug("Button %s at (%d,%d) area=%.0f", name, cx, cy, cv2.contourArea(cnt))
+                break
 
         return buttons
 

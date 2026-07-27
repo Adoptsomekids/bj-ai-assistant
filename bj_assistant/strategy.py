@@ -124,7 +124,7 @@ ACTION_LABELS = {
     "S": "STAND",
     "D": "DOUBLE DOWN",
     "P": "SPLIT",
-    "R": "SURRENDER (or HIT if not available)",
+    "R": "SURRENDER → HIT if unavailable",
 }
 
 
@@ -244,7 +244,7 @@ def decide(state: GameState) -> dict:
         reasoning += " (Split not available → Hit)"
     if action == "R" and not state.can_surrender:
         action = "H"
-        reasoning += " (Surrender not available → Hit)"
+        reasoning += " | Surrender not available → Hit"
 
     return {
         "action": action,

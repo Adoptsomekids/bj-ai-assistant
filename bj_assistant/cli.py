@@ -251,10 +251,11 @@ def debug_frame(ctx: click.Context, serial: str, out: str, raw: str) -> None:
     strip_y2 = int(Layout.BUTTON_ROW_Y_BOTTOM * h)
     strip = frame[strip_y1:strip_y2, 0:w]
     hsv_strip = cv2.cvtColor(strip, cv2.COLOR_BGR2HSV)
-    for btn_name, (lo, hi) in Layout.BUTTON_COLOURS.items():
+    for btn_name, (lo, hi, min_px) in Layout.BUTTON_COLOURS.items():
         mask = cv2.inRange(hsv_strip, np.array(lo), np.array(hi))
         px = int(np.count_nonzero(mask))
-        table.add_row(f"colour_{btn_name.lower()}_px", str(px))
+        present = "✅" if px >= min_px else "⛔"
+        table.add_row(f"colour_{btn_name.lower()}_px", f"{px}  {present} (min={min_px})")
     # The KEY discriminator: Hit bright-green (≥3000 = playing, <3000 = betting/result)
     hit_bright = cv2.inRange(hsv_strip,
                              np.array([45, 150, 150]), np.array([90, 255, 255]))
@@ -279,6 +280,13 @@ def debug_frame(ctx: click.Context, serial: str, out: str, raw: str) -> None:
          int((Layout.RESULT_REGION_X + Layout.RESULT_REGION_W) * w),
          int((Layout.RESULT_REGION_Y + Layout.RESULT_REGION_H) * h),
          (0, 255, 255), "result_rgn")
+
+    # Chip row region
+    _box(0,
+         int(Layout.CHIP_ROW_Y_TOP * h),
+         w,
+         int(Layout.CHIP_ROW_Y_BOTTOM * h),
+         (0, 200, 200), "chip_row")
 
     # Dealer bubble
     dbx = int(Layout.DEALER_BUBBLE_CX * w)

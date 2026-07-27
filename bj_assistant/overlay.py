@@ -83,15 +83,28 @@ class TerminalHUD:
                 return Panel("[dim]Waiting for cards...[/dim]",
                              title="♠ BJ AI Assistant", border_style="dim")
 
+            # ── Betting phase special display ─────────────────────────
+            if data.get("phase") == "betting":
+                tc  = data.get("true_count", 0.0)
+                bet = data.get("bet_units", 1)
+                rc  = data.get("running_count", 0)
+                tc_colour = "green" if tc > 1 else "red" if tc < -1 else "white"
+                body = (
+                    f"[dim]True Count:[/dim] [{tc_colour}]{tc:+.1f}[/{tc_colour}]  "
+                    f"[dim]Running:[/dim] [{tc_colour}]{rc:+d}[/{tc_colour}]\n"
+                    f"[dim]Recommended Bet:[/dim] [yellow]{bet}×[/yellow] unit\n"
+                    f"[dim]Placing bet automatically...[/dim]"
+                )
+                return Panel(body, title="♠ BJ AI Assistant — 🎲 BETTING",
+                             border_style="yellow")
+
             action  = data.get("action", "?")
             label   = ACTION_EMOJI.get(action, data.get("label", action))
             colour  = ACTION_COLOUR_RICH.get(action, "white")
             tc      = data.get("true_count", 0.0)
             rc      = data.get("running_count", 0)
             bet     = data.get("bet_units", 1)
-            total   = data.get("player_total", 0)
-            soft    = data.get("is_soft", False)
-            p_cards = data.get("player_cards", [])
+            p_disp  = data.get("player_display") or str(data.get("player_total", "?"))
             d_up    = data.get("dealer_upcard", "?")
             reason  = data.get("reasoning", "")
 
@@ -100,8 +113,8 @@ class TerminalHUD:
             tbl = Table(show_header=False, box=None, padding=(0, 2), expand=True)
             tbl.add_row(
                 f"[{colour}]{label}[/{colour}]",
-                f"[dim]You:[/dim] {' '.join(p_cards) or str(total)}{'s' if soft else ''}  "
-                f"[dim]│ Dealer:[/dim] {d_up}"
+                f"[dim]You:[/dim] [bold]{p_disp}[/bold]  "
+                f"[dim]│ Dealer:[/dim] [bold]{d_up}[/bold]"
             )
             tbl.add_row(
                 f"[dim]True Count:[/dim] [{tc_colour}]{tc:+.1f}[/{tc_colour}]  "
@@ -261,9 +274,7 @@ class TkinterHUD:
         action  = data.get("action", "?")
         colour  = ACTION_COLOUR_TK.get(action, COLOURS["text"])
         label   = data.get("label", action)
-        total   = data.get("player_total", 0)
-        soft    = data.get("is_soft", False)
-        p_cards = data.get("player_cards", [])
+        p_disp  = data.get("player_display") or str(data.get("player_total", "?"))
         d_up    = data.get("dealer_upcard", "?")
         tc      = data.get("true_count", 0.0)
         rc      = data.get("running_count", 0)
@@ -273,7 +284,7 @@ class TkinterHUD:
         self._action_lbl.configure(text=action, fg=colour)
         self._sub_lbl.configure(text=label)
         self._cards_lbl.configure(
-            text=f"You: {' '.join(p_cards) or str(total)}{'s' if soft else ''}  │  Dealer: {d_up}")
+            text=f"You: {p_disp}  │  Dealer: {d_up}")
         self._count_lbl.configure(
             text=f"True Count: {tc:+.1f}   Running: {rc:+d}", fg=tc_col)
         self._bet_lbl.configure(text=f"Recommended Bet: {bet}× unit")
