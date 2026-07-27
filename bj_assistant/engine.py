@@ -69,7 +69,12 @@ class BJEngine:
         self._last_tapped_hand: tuple = (-1, -1)
         # Betting phase state
         self._bet_placed: bool = False
-        self._bet_phase_entered: float = 0.0   # monotonic time when betting phase started
+        self._bet_phase_entered: float = 0.0
+        # First-hand gate: we wait for the user to play the first hand manually,
+        # then take over automatically from the second hand onwards.
+        self._hands_completed: int = 0
+        # Last bet denomination placed (to detect when we need to change it)
+        self._last_bet_denomination: int = 0
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -129,31 +134,32 @@ class BJEngine:
         gf: GameFrame = self._detector.detect(frame)
         self._live_buttons = gf.buttons
 
-        # ── Result phase: reset tracking + auto-tap Deal button ──────
+        # ── Result phase: count hand + reset + auto-tap Deal ─────────
         if gf.game_state == "result":
             if self._hand_counted:
-                self._hand_counted = False
-                self._last_player_total = None
-                self._last_dealer_total = None
+                self._hands_completed   += 1
+                self._hand_counted       = False
+                self._last_player_total  = None
+                self._last_dealer_total  = None
                 self._bet_placed         = False
-                self._bet_phase_entered  = 0.0   # ready for next betting phase
-            # Auto-tap Deal/New-round button so next hand starts
-            if self._auto_tap and self._adb and gf.deal_btn:
-                now = time.monotonic()
-                if now - self._last_tap_time > self._TAP_COOLDOWN:
-                    x, y = gf.deal_btn
-                    log.info("Auto-tap: Deal button at (%d,%d)", x, y)
-                    self._adb.tap(x, y)
-                    self._last_tap_time = now
+                self._bet_phase_entered  = 0.0
+                log.info("Hand #%d completed", self._hands_completed)
+            # Auto-tap Deal only after first hand (user plays first hand manually)
+            if self._auto_tap and self._adb and self._hands_completed >= 1:
+                if gf.deal_btn:
+                    now = time.monotonic()
+                    if now - self._last_tap_time > self._TAP_COOLDOWN:
+                        log.info("Auto-tap: Deal at (%d,%d)", *gf.deal_btn)
+                        self._adb.tap(*gf.deal_btn)
+                        self._last_tap_time = now
             return
 
-        # ── Betting phase: tap the right chip based on TC ────────────
+        # ── Betting phase: select chip + Deal ────────────────────────
         if gf.game_state == "betting":
             now = time.monotonic()
-            # Track when we first entered this betting phase
             if self._bet_phase_entered == 0.0:
                 self._bet_phase_entered = now
-                self._bet_placed = False   # fresh hand, reset
+                self._bet_placed = False
 
             tc  = self._counter.true_count()
             rc  = self._counter.running_count
@@ -164,21 +170,21 @@ class BJEngine:
                     "true_count": round(tc, 2),
                     "running_count": rc,
                     "bet_units": bet,
+                    "hands_completed": self._hands_completed,
                 })
-            if self._auto_tap and self._adb and not self._bet_placed:
+            # Only auto-bet from second hand onwards
+            if self._auto_tap and self._adb and self._hands_completed >= 1 and not self._bet_placed:
                 if gf.chips:
-                    # Chips detected — place bet normally
                     self._place_bet(gf)
                 elif now - self._bet_phase_entered > 8.0:
-                    # Waited 8s with no chips — fallback: tap center of button row
-                    # (in case chip detection failed but a bet chip is visible there)
+                    # Fallback: tap center of chip row
                     cx = gf.frame_w // 2
-                    cy = int(0.919 * gf.frame_h)   # center of btn strip
-                    log.warning("Auto-bet: no chips detected after 8s — tapping center (%d,%d)", cx, cy)
+                    cy = int(0.919 * gf.frame_h)
+                    log.warning("Auto-bet fallback: tapping center (%d,%d)", cx, cy)
                     self._adb.tap(cx, cy)
                     time.sleep(0.6)
                     if gf.deal_btn:
-                        self._adb.tap(gf.deal_btn[0], gf.deal_btn[1])
+                        self._adb.tap(*gf.deal_btn)
                     self._bet_placed = True
                     self._bet_phase_entered = 0.0
             return
@@ -286,65 +292,74 @@ class BJEngine:
     # TC-based units: 1,2,4,8,12 → we tap the largest chip that fits.
     _CHIP_VALUES_DESC = [1000, 500, 100, 25, 5]
 
-    def _place_bet(self, gf: GameFrame) -> None:
-        """
-        During the betting phase, tap chips to place the optimal bet.
+    def _target_bet_units(self) -> int:
+        """Return the number of bet units based on current true count."""
+        tc = self._counter.true_count()
+        if tc <= 1:   return 1
+        elif tc <= 2: return 2
+        elif tc <= 3: return 4
+        elif tc <= 4: return 8
+        else:          return 12
 
-        Strategy:
-          1. Compute desired bet in units using the current true count.
-          2. Convert units to a chip denomination (tap the single biggest chip
-             that is ≤ desired amount, if multiple are needed tap up to 3 times).
-          3. After placing, tap the Deal button to start the hand.
-        """
-        tc       = self._counter.true_count()
-        # Same bet-sizing as strategy.py
-        if tc <= 1:
-            units = 1
-        elif tc <= 2:
-            units = 2
-        elif tc <= 3:
-            units = 4
-        elif tc <= 4:
-            units = 8
-        else:
-            units = 12
-
+    def _best_chip(self, gf: GameFrame, units: int) -> Optional[int]:
+        """Return the best chip denomination for the desired units."""
         if not gf.chips:
-            log.debug("Betting phase but no chips detected — skipping bet tap")
-            return
-
-        # Pick best chip: largest denomination available that is ≤ units
-        # Fall back to smallest chip if all chips are > units
+            return None
         available = sorted(gf.chips.keys(), reverse=True)
-        chosen = available[-1]  # default: smallest chip
+        chosen = available[-1]
         for v in available:
             if v <= units:
                 chosen = v
                 break
+        return chosen
 
-        coords = gf.chips.get(chosen)
-        if not coords or not self._adb:
+    def _place_bet(self, gf: GameFrame) -> None:
+        """
+        Place the optimal bet based on the current true count.
+
+        Flow:
+          1. Determine target denomination from TC.
+          2. If the current bet uses a DIFFERENT denomination → tap Clear first.
+          3. Tap the chosen chip (1–3 times to approximate target units).
+          4. Tap Deal to start the hand.
+        """
+        if not self._adb:
             return
 
-        # Number of taps: how many times to tap this chip to reach ~units
-        taps = max(1, min(3, round(units / chosen)))
-        x, y = coords
-        log.info("Auto-bet: TC=%.1f → %d units → chip %d × %d taps at (%d,%d)",
-                 tc, units, chosen, taps, x, y)
+        units  = self._target_bet_units()
+        chosen = self._best_chip(gf, units)
+        if chosen is None:
+            log.debug("_place_bet: no chips detected")
+            return
 
+        tc = self._counter.true_count()
+        taps = max(1, min(3, round(units / max(chosen, 1))))
+        log.info("Auto-bet: TC=%.1f → %d units → chip %d × %d taps", tc, units, chosen, taps)
+
+        # If we need a different denomination than last time, clear the current bet first
+        if self._last_bet_denomination != 0 and self._last_bet_denomination != chosen:
+            if gf.clear_btn:
+                log.info("Auto-bet: changing denomination %d→%d, tapping Clear at (%d,%d)",
+                         self._last_bet_denomination, chosen, *gf.clear_btn)
+                self._adb.tap(*gf.clear_btn)
+                time.sleep(0.5)
+            else:
+                log.debug("Auto-bet: denomination change needed but no Clear button found")
+
+        x, y = gf.chips[chosen]
         for _ in range(taps):
             self._adb.tap(x, y)
-            time.sleep(0.3)
+            time.sleep(0.35)
 
-        self._bet_placed    = True
-        self._last_tap_time = time.monotonic()
+        self._last_bet_denomination = chosen
+        self._bet_placed            = True
+        self._last_tap_time         = time.monotonic()
 
-        # Tap Deal button to start the hand (with a short pause after betting)
+        # Short pause then tap Deal
         time.sleep(0.5)
-        if gf.deal_btn and self._adb:
-            dx, dy = gf.deal_btn
-            log.info("Auto-tap: Deal button at (%d,%d)", dx, dy)
-            self._adb.tap(dx, dy)
+        if gf.deal_btn:
+            log.info("Auto-tap: Deal at (%d,%d)", *gf.deal_btn)
+            self._adb.tap(*gf.deal_btn)
             self._last_tap_time = time.monotonic()
 
     # ------------------------------------------------------------------

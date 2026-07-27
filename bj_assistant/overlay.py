@@ -85,15 +85,20 @@ class TerminalHUD:
 
             # ── Betting phase special display ─────────────────────────
             if data.get("phase") == "betting":
-                tc  = data.get("true_count", 0.0)
-                bet = data.get("bet_units", 1)
-                rc  = data.get("running_count", 0)
+                tc     = data.get("true_count", 0.0)
+                bet    = data.get("bet_units", 1)
+                rc     = data.get("running_count", 0)
+                hands  = data.get("hands_completed", 0)
                 tc_colour = "green" if tc > 1 else "red" if tc < -1 else "white"
+                if hands == 0:
+                    mode_line = "[yellow]⏳ Waiting for you to play first hand...[/yellow]"
+                else:
+                    mode_line = "[dim]🤖 Placing bet automatically...[/dim]"
                 body = (
                     f"[dim]True Count:[/dim] [{tc_colour}]{tc:+.1f}[/{tc_colour}]  "
                     f"[dim]Running:[/dim] [{tc_colour}]{rc:+d}[/{tc_colour}]\n"
                     f"[dim]Recommended Bet:[/dim] [yellow]{bet}×[/yellow] unit\n"
-                    f"[dim]Placing bet automatically...[/dim]"
+                    f"{mode_line}"
                 )
                 return Panel(body, title="♠ BJ AI Assistant — 🎲 BETTING",
                              border_style="yellow")

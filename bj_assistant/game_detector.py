@@ -101,14 +101,25 @@ class Layout:
     RESULT_REGION_W = 0.90
     RESULT_REGION_H = 0.10   # tight band: only the result banner area
 
-    # Deal / New Round button — appears after result or on betting screen
-    # In the app it is a large green button at bottom center
-    DEAL_BTN_Y_TOP    = 0.877
-    DEAL_BTN_Y_BOTTOM = 0.962
-    DEAL_BTN_X_LEFT   = 0.25
-    DEAL_BTN_X_RIGHT  = 0.75
-    DEAL_BTN_COLOUR_LO = (45, 80, 80)
+    # Deal / Play button — appears after result or on betting screen.
+    # Observed on live frame at (870, 1994) = y≈0.852, x≈0.806
+    # Search the full bottom 25% of screen for a standalone green blob
+    DEAL_BTN_Y_TOP    = 0.800
+    DEAL_BTN_Y_BOTTOM = 0.965
+    DEAL_BTN_X_LEFT   = 0.0
+    DEAL_BTN_X_RIGHT  = 1.0
+    DEAL_BTN_COLOUR_LO = (40, 80, 80)
     DEAL_BTN_COLOUR_HI = (90, 255, 255)
+    DEAL_BTN_MIN_PX    = 2000   # must be a real button, not a small green icon
+
+    # Clear button — appears on betting screen to remove current bet
+    # Usually a red/orange button near the chip area
+    # We detect it by looking for a red blob in the lower quarter that is NOT Stand
+    CLEAR_BTN_Y_TOP   = 0.820
+    CLEAR_BTN_Y_BOTTOM= 0.880
+    CLEAR_BTN_COLOUR_LO = (0, 100, 80)
+    CLEAR_BTN_COLOUR_HI = (15, 255, 255)
+    CLEAR_BTN_MIN_PX    = 3000
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +138,8 @@ class GameFrame:
     # buttons = {"Stand":(cx,cy), "Hit":(cx,cy), ...} during playing phase
     chips: dict[int, Tuple[int,int]]   = field(default_factory=dict)
     # chips = {5:(cx,cy), 25:(cx,cy), 100:(cx,cy), ...} during betting phase
-    deal_btn: Optional[Tuple[int,int]] = None   # coords of Deal/New-round button
+    deal_btn: Optional[Tuple[int,int]] = None   # coords of Deal/Play button
+    clear_btn: Optional[Tuple[int,int]] = None  # coords of Clear-bet button
     game_state: str                    = "unknown"
     # "betting" | "playing" | "result" | "unknown"
     frame_w: int                       = 720
@@ -223,8 +235,9 @@ class VegasBJDetector:
             gf.buttons = self._detect_buttons(frame, w, h)
 
         if gf.game_state in ("betting", "result"):
-            gf.chips    = self._detect_chips(frame, w, h)
-            gf.deal_btn = self._detect_deal_button(frame, w, h)
+            gf.chips     = self._detect_chips(frame, w, h)
+            gf.deal_btn  = self._detect_deal_button(frame, w, h)
+            gf.clear_btn = self._detect_clear_button(frame, w, h)
 
         log.debug(
             "Frame: state=%s dealer=%s player=%s(%s) upcard=%s btns=%s chips=%s",
@@ -571,28 +584,69 @@ class VegasBJDetector:
         self, frame: np.ndarray, w: int, h: int
     ) -> "Optional[Tuple[int,int]]":
         """
-        Detect the Deal / New Round button that appears after a hand ends.
-        Returns (cx, cy) of the button centre, or None.
+        Detect the Deal/Play button — the green button that starts the next hand.
+        Searches the full bottom quarter for the largest green blob that is
+        NOT the Hit button (which is at x≈0.62, y≈0.908).
+        Returns (cx, cy) or None.
         """
         y1 = int(Layout.DEAL_BTN_Y_TOP    * h)
         y2 = int(Layout.DEAL_BTN_Y_BOTTOM * h)
-        x1 = int(Layout.DEAL_BTN_X_LEFT   * w)
-        x2 = int(Layout.DEAL_BTN_X_RIGHT  * w)
-        roi  = frame[y1:y2, x1:x2]
+        roi  = frame[y1:y2, 0:w]
         hsv  = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
 
         lo = np.array(Layout.DEAL_BTN_COLOUR_LO)
         hi = np.array(Layout.DEAL_BTN_COLOUR_HI)
         mask = cv2.inRange(hsv, lo, hi)
-        px   = int(np.count_nonzero(mask))
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (13, 13))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
 
-        if px >= 2000:
-            ys, xs = np.where(mask > 0)
-            cx = x1 + int(np.mean(xs))
-            cy = y1 + int(np.mean(ys))
-            log.debug("Deal button detected at (%d,%d) px=%d", cx, cy, px)
-            return (cx, cy)
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        best = None
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            if area < Layout.DEAL_BTN_MIN_PX:
+                continue
+            bx, by, bw, bh = cv2.boundingRect(cnt)
+            cx = bx + bw // 2
+            cy = y1 + by + bh // 2
+            # Skip the Hit button area (x≈620-720, y≈0.88-0.93)
+            hit_x_lo, hit_x_hi = int(0.55 * w), int(0.75 * w)
+            hit_y_lo, hit_y_hi = int(0.87 * h), int(0.94 * h)
+            if hit_x_lo <= cx <= hit_x_hi and hit_y_lo <= cy <= hit_y_hi:
+                continue
+            if best is None or area > best[2]:
+                best = (cx, cy, area)
+
+        if best:
+            log.debug("Deal button at (%d,%d) area=%.0f", best[0], best[1], best[2])
+            return (best[0], best[1])
         return None
+
+    def _detect_clear_button(
+        self, frame: np.ndarray, w: int, h: int
+    ) -> "Optional[Tuple[int,int]]":
+        """
+        Detect the Clear/Undo bet button on the betting screen.
+        In Vegas BJ this is typically a red button near the chip area.
+        Returns (cx, cy) or None.
+        """
+        y1 = int(Layout.CLEAR_BTN_Y_TOP    * h)
+        y2 = int(Layout.CLEAR_BTN_Y_BOTTOM * h)
+        roi  = frame[y1:y2, 0:w]
+        hsv  = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+
+        lo = np.array(Layout.CLEAR_BTN_COLOUR_LO)
+        hi = np.array(Layout.CLEAR_BTN_COLOUR_HI)
+        mask = cv2.inRange(hsv, lo, hi)
+        px = int(np.count_nonzero(mask))
+        if px < Layout.CLEAR_BTN_MIN_PX:
+            return None
+
+        ys, xs = np.where(mask > 0)
+        cx = int(np.mean(xs))
+        cy = y1 + int(np.mean(ys))
+        log.debug("Clear button at (%d,%d) px=%d", cx, cy, px)
+        return (cx, cy)
 
     # ------------------------------------------------------------------
     # Button detection
