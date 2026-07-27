@@ -281,31 +281,36 @@ class VegasBJDetector:
            can't read the button labels.
         3. Action button TEXT via OCR (fallback)
         """
-        # ── 1. Result overlay ────────────────────────────────────────────
+        # ── 1. Button strip OCR — checked FIRST to catch "clear"/"deal" ──
+        # The "clear/deal" betting screen keeps the Hit button visible (green),
+        # which would otherwise be misclassified as "playing". OCR is the only
+        # reliable way to distinguish this screen.
+        btn_strip = self._get_button_strip(frame, w, h)
+        btn_text  = self._ocr_text(btn_strip).lower()
+        log.debug("Button strip OCR: %r", btn_text)
+
+        # "clear" or "deal" in strip = betting screen with a placed bet
+        BETTING_WORDS = ("clear", "deal")
+        if any(word in btn_text for word in BETTING_WORDS):
+            return "betting"
+
+        # ── 2. Result overlay ────────────────────────────────────────────
         rx = int(Layout.RESULT_REGION_X * w)
         ry = int(Layout.RESULT_REGION_Y * h)
         rw = int(Layout.RESULT_REGION_W * w)
         rh = int(Layout.RESULT_REGION_H * h)
-        result_roi = frame[ry:ry+rh, rx:rx+rw]
+        result_roi  = frame[ry:ry+rh, rx:rx+rw]
         result_text = self._ocr_text(result_roi).lower()
-        # Only trigger on outcome banners — NOT on the permanent table felt text.
-        # "Blackjack Pays 3 to 2" and "Dealer Must Stand Soft 17" are always
-        # visible on the table felt, so we must NOT match those.
         RESULT_KEYWORDS = ("dealer wins", "player wins", "you win", "push", "bust",
-                           "dealer busts", "you bust", "it's a tie")
+                           "dealer busts", "you bust", "it's a tie", "blackjack")
         if any(kw in result_text for kw in RESULT_KEYWORDS):
             return "result"
 
-        # ── 2. Button colour detection (primary playing indicator) ───────
-        # The action buttons have very distinctive HSV colours; OCR is not needed
-        # to know we are in a playing state.
+        # ── 3. Button colour detection (playing indicator) ───────────────
         if self._colour_buttons_visible(frame, w, h):
             return "playing"
 
-        # ── 3. Button OCR fallback (in case colours are off) ────────────
-        btn_strip = self._get_button_strip(frame, w, h)
-        btn_text = self._ocr_text(btn_strip).lower()
-        log.debug("Button strip OCR: %r", btn_text)
+        # ── 4. Button text OCR fallback ──────────────────────────────────
         ACTION_WORDS = ("stand", "hit", "double", "split", "surrender")
         if any(word in btn_text for word in ACTION_WORDS):
             return "playing"
