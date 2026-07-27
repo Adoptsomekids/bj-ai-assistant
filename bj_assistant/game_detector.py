@@ -91,6 +91,14 @@ class Layout:
     CHIP_X_FRACS = [0.10, 0.27, 0.45, 0.63, 0.82]
     CHIP_VALUES  = [5, 25, 100, 500, 1000]
 
+    # Betting screen dark buttons ("Clear" / "Deal") — appear when a bet is placed
+    # These buttons have very dark (near-black) backgrounds with white text.
+    # Detected by Canny edge blobs in the btn strip, not by HSV colour.
+    # From live frame analysis: Clear≈(410,2124), Deal≈(670,2124), y≈0.908
+    # We just find the two largest rectangular blobs in the strip via Canny.
+    DARK_BTN_Y_TOP    = 0.877
+    DARK_BTN_Y_BOTTOM = 0.962
+
     # Game state detection — result overlay text region
     # IMPORTANT: must NOT overlap the permanent felt text:
     #   "BLACKJACK PAYS 3 TO 2"  at y≈27%–30%
@@ -136,11 +144,12 @@ class GameFrame:
     player_card_ranks: List[str]       = field(default_factory=list)
     buttons: dict[str, Tuple[int,int]] = field(default_factory=dict)
     # buttons = {"Stand":(cx,cy), "Hit":(cx,cy), ...} during playing phase
-    chips: dict[int, Tuple[int,int]]   = field(default_factory=dict)
-    # chips = {5:(cx,cy), 25:(cx,cy), 100:(cx,cy), ...} during betting phase
-    deal_btn: Optional[Tuple[int,int]] = None   # coords of Deal/Play button
-    clear_btn: Optional[Tuple[int,int]] = None  # coords of Clear-bet button
-    game_state: str                    = "unknown"
+    chips: dict[int, Tuple[int,int]]    = field(default_factory=dict)
+    deal_btn: Optional[Tuple[int,int]]  = None  # Deal/Play button
+    clear_btn: Optional[Tuple[int,int]] = None  # Clear-bet button
+    # dark_btns: {"Clear":(cx,cy), "Deal":(cx,cy)} — dark-background buttons
+    dark_btns: dict[str, Tuple[int,int]] = field(default_factory=dict)
+    game_state: str                     = "unknown"
     # "betting" | "playing" | "result" | "unknown"
     frame_w: int                       = 720
     frame_h: int                       = 1560
@@ -235,9 +244,15 @@ class VegasBJDetector:
             gf.buttons = self._detect_buttons(frame, w, h)
 
         if gf.game_state in ("betting", "result"):
-            gf.chips     = self._detect_chips(frame, w, h)
-            gf.deal_btn  = self._detect_deal_button(frame, w, h)
-            gf.clear_btn = self._detect_clear_button(frame, w, h)
+            gf.chips      = self._detect_chips(frame, w, h)
+            gf.deal_btn   = self._detect_deal_button(frame, w, h)
+            gf.clear_btn  = self._detect_clear_button(frame, w, h)
+            gf.dark_btns  = self._detect_dark_buttons(frame, w, h)
+            # Prefer dark_btns positions over colour-based detection
+            if "Deal" in gf.dark_btns:
+                gf.deal_btn = gf.dark_btns["Deal"]
+            if "Clear" in gf.dark_btns:
+                gf.clear_btn = gf.dark_btns["Clear"]
 
         log.debug(
             "Frame: state=%s dealer=%s player=%s(%s) upcard=%s btns=%s chips=%s",
@@ -579,6 +594,59 @@ class VegasBJDetector:
             log.debug("Chip %d assigned at (%d,%d)", value, cx_b, cy_b)
 
         return chips
+
+    def _detect_dark_buttons(
+        self, frame: np.ndarray, w: int, h: int
+    ) -> "dict[str, Tuple[int,int]]":
+        """
+        Detect the dark-background "Clear" and "Deal" buttons that appear
+        on the betting screen after a bet chip is placed.
+
+        These buttons have near-black backgrounds (V < 40) — not detectable
+        by HSV colour matching. We find rectangular blobs in the button strip
+        using Canny edge detection, sort them left-to-right, and label them
+        Clear (left) and Deal (right).
+        """
+        y1 = int(Layout.DARK_BTN_Y_TOP    * h)
+        y2 = int(Layout.DARK_BTN_Y_BOTTOM * h)
+        strip = frame[y1:y2, 0:w]
+        gray  = cv2.cvtColor(strip, cv2.COLOR_BGR2GRAY)
+
+        # Canny edges find button outlines even on dark backgrounds
+        edges = cv2.Canny(gray, 25, 80)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (4, 4))
+        edges  = cv2.dilate(edges, kernel, iterations=2)
+
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL,
+                                       cv2.CHAIN_APPROX_SIMPLE)
+        # Collect button-sized rectangular blobs
+        blobs = []
+        strip_h = y2 - y1
+        for cnt in contours:
+            bx, by, bw, bh = cv2.boundingRect(cnt)
+            area = bw * bh
+            aspect = bw / max(bh, 1)
+            # Button shape: wider than tall, minimum size
+            if area < int(0.03 * w * strip_h):
+                continue
+            if not (1.0 < aspect < 5.0):
+                continue
+            cx = bx + bw // 2
+            cy = y1 + by + bh // 2
+            blobs.append((cx, cy, area))
+
+        if len(blobs) < 2:
+            log.debug("_detect_dark_buttons: found %d blobs (need ≥2)", len(blobs))
+            return {}
+
+        # Sort left-to-right — leftmost = Clear, rightmost = Deal
+        blobs.sort(key=lambda b: b[0])
+        result: dict[str, Tuple[int, int]] = {}
+        result["Clear"] = (blobs[0][0],  blobs[0][1])
+        result["Deal"]  = (blobs[-1][0], blobs[-1][1])
+        log.debug("Dark btns: Clear=(%d,%d) Deal=(%d,%d)",
+                  *result["Clear"], *result["Deal"])
+        return result
 
     def _detect_deal_button(
         self, frame: np.ndarray, w: int, h: int

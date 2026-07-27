@@ -70,9 +70,10 @@ class BJEngine:
         # Betting phase state
         self._bet_placed: bool = False
         self._bet_phase_entered: float = 0.0
-        # First-hand gate: we wait for the user to play the first hand manually,
-        # then take over automatically from the second hand onwards.
+        # First-hand gate: user plays the first BETTING manually.
+        # If we start mid-playing-hand, we count that as hand #1 completing.
         self._hands_completed: int = 0
+        self._started_mid_hand: bool = False  # True if engine started during a hand
         # Last bet denomination placed (to detect when we need to change it)
         self._last_bet_denomination: int = 0
 
@@ -136,6 +137,11 @@ class BJEngine:
 
         # ── Result phase: count hand + reset + auto-tap Deal ─────────
         if gf.game_state == "result":
+            # If we started mid-hand, count it now when we see the result
+            if self._started_mid_hand and not self._hand_counted:
+                self._hands_completed += 1
+                self._started_mid_hand = False
+                log.info("Started mid-hand — counting as hand #%d", self._hands_completed)
             if self._hand_counted:
                 self._hands_completed   += 1
                 self._hand_counted       = False
@@ -176,21 +182,39 @@ class BJEngine:
             if self._auto_tap and self._adb and self._hands_completed >= 1 and not self._bet_placed:
                 if gf.chips:
                     self._place_bet(gf)
+                elif gf.deal_btn:
+                    # No chips but Deal button visible → a bet is already placed.
+                    # Just tap Deal to start the hand.
+                    now2 = time.monotonic()
+                    if now2 - self._last_tap_time > self._TAP_COOLDOWN:
+                        log.info("Auto-bet: no chips but Deal visible → tapping Deal at (%d,%d)", *gf.deal_btn)
+                        self._adb.tap(*gf.deal_btn)
+                        self._last_tap_time = now2
+                        self._bet_placed = True
+                        self._bet_phase_entered = 0.0
                 elif now - self._bet_phase_entered > 8.0:
-                    # Fallback: tap center of chip row
+                    # Absolute fallback after 8s
                     cx = gf.frame_w // 2
                     cy = int(0.919 * gf.frame_h)
                     log.warning("Auto-bet fallback: tapping center (%d,%d)", cx, cy)
                     self._adb.tap(cx, cy)
                     time.sleep(0.6)
-                    if gf.deal_btn:
-                        self._adb.tap(*gf.deal_btn)
                     self._bet_placed = True
                     self._bet_phase_entered = 0.0
             return
 
         if not gf.is_actionable:
+            # If we see a playing state that isn't actionable yet (animation),
+            # mark that we started mid-hand so we know to take over after result
+            if gf.game_state == "playing" and self._hands_completed == 0 and not self._started_mid_hand:
+                self._started_mid_hand = True
+                log.info("Engine started mid-hand — will auto-play from next hand")
             return  # not enough info yet
+
+        # Mark mid-hand if this is the first actionable frame
+        if self._hands_completed == 0 and not self._started_mid_hand:
+            self._started_mid_hand = True
+            log.info("Engine started mid-hand (actionable) — will auto-play from next hand")
 
         # Use rank OCR result if available; fall back to bubble total as upcard
         dealer_upcard = gf.effective_dealer_upcard
