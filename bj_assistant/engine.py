@@ -67,8 +67,9 @@ class BJEngine:
         # Auto-tap de-duplication state
         self._last_tap_time: float = 0.0
         self._last_tapped_hand: tuple = (-1, -1)
-        # Betting phase: True after we've placed the bet for this hand
+        # Betting phase state
         self._bet_placed: bool = False
+        self._bet_phase_entered: float = 0.0   # monotonic time when betting phase started
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -134,7 +135,8 @@ class BJEngine:
                 self._hand_counted = False
                 self._last_player_total = None
                 self._last_dealer_total = None
-                self._bet_placed        = False
+                self._bet_placed         = False
+                self._bet_phase_entered  = 0.0   # ready for next betting phase
             # Auto-tap Deal/New-round button so next hand starts
             if self._auto_tap and self._adb and gf.deal_btn:
                 now = time.monotonic()
@@ -147,6 +149,12 @@ class BJEngine:
 
         # ── Betting phase: tap the right chip based on TC ────────────
         if gf.game_state == "betting":
+            now = time.monotonic()
+            # Track when we first entered this betting phase
+            if self._bet_phase_entered == 0.0:
+                self._bet_phase_entered = now
+                self._bet_placed = False   # fresh hand, reset
+
             tc  = self._counter.true_count()
             rc  = self._counter.running_count
             bet = (1 if tc <= 1 else 2 if tc <= 2 else 4 if tc <= 3 else 8 if tc <= 4 else 12)
@@ -158,7 +166,21 @@ class BJEngine:
                     "bet_units": bet,
                 })
             if self._auto_tap and self._adb and not self._bet_placed:
-                self._place_bet(gf)
+                if gf.chips:
+                    # Chips detected — place bet normally
+                    self._place_bet(gf)
+                elif now - self._bet_phase_entered > 8.0:
+                    # Waited 8s with no chips — fallback: tap center of button row
+                    # (in case chip detection failed but a bet chip is visible there)
+                    cx = gf.frame_w // 2
+                    cy = int(0.919 * gf.frame_h)   # center of btn strip
+                    log.warning("Auto-bet: no chips detected after 8s — tapping center (%d,%d)", cx, cy)
+                    self._adb.tap(cx, cy)
+                    time.sleep(0.6)
+                    if gf.deal_btn:
+                        self._adb.tap(gf.deal_btn[0], gf.deal_btn[1])
+                    self._bet_placed = True
+                    self._bet_phase_entered = 0.0
             return
 
         if not gf.is_actionable:

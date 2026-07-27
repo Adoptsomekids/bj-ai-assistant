@@ -517,39 +517,53 @@ class VegasBJDetector:
         self, frame: np.ndarray, w: int, h: int
     ) -> "dict[int, Tuple[int,int]]":
         """
-        Detect betting chips in the button-row band.
-        Returns {chip_value: (cx, cy)} for each chip found.
+        Detect betting chip row during the betting phase.
 
-        Strategy: chips sit at known fractional x positions.
-        We probe a small column around each expected x and look for
-        the gold/amber colour that all Vegas BJ chips share.
+        Finds all gold/amber blobs in the chip strip, sorts them left-to-right,
+        and assigns chip denominations by position order (5, 25, 100, 500, 1000).
+        This is more robust than fixed x-positions since the chip layout may vary.
         """
         y1 = int(Layout.CHIP_ROW_Y_TOP    * h)
         y2 = int(Layout.CHIP_ROW_Y_BOTTOM * h)
         strip = frame[y1:y2, 0:w]
         hsv   = cv2.cvtColor(strip, cv2.COLOR_BGR2HSV)
 
-        # Gold/amber range covers all chip denominations
-        gold_lo = np.array([15, 80, 80])
-        gold_hi = np.array([40, 255, 255])
+        # Broad gold/amber range — covers all chip denominations
+        gold_lo = np.array([10, 60, 60])
+        gold_hi = np.array([45, 255, 255])
         gold_mask = cv2.inRange(hsv, gold_lo, gold_hi)
 
-        chips: dict[int, Tuple[int, int]] = {}
-        col_w = max(1, int(w * 0.08))   # probe ±4% around each expected x
+        # Close to merge nearby pixels into chip blobs
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+        gold_mask = cv2.morphologyEx(gold_mask, cv2.MORPH_CLOSE, kernel)
 
-        for frac, value in zip(Layout.CHIP_X_FRACS, Layout.CHIP_VALUES):
-            cx_exp = int(frac * w)
-            x1c = max(0, cx_exp - col_w)
-            x2c = min(w, cx_exp + col_w)
-            col_mask = gold_mask[:, x1c:x2c]
-            px = int(np.count_nonzero(col_mask))
-            if px >= 200:   # at least 200 gold pixels → chip present
-                # find centroid
-                ys, xs = np.where(col_mask > 0)
-                cx = x1c + int(np.mean(xs)) if len(xs) else cx_exp
-                cy = y1 + int(np.mean(ys)) if len(ys) else (y1 + y2) // 2
-                chips[value] = (cx, cy)
-                log.debug("Chip %d detected at (%d,%d) px=%d", value, cx, cy, px)
+        total_px = int(np.count_nonzero(gold_mask))
+        log.debug("Chip detection: total gold px=%d in strip y=%d-%d", total_px, y1, y2)
+
+        contours, _ = cv2.findContours(gold_mask, cv2.RETR_EXTERNAL,
+                                       cv2.CHAIN_APPROX_SIMPLE)
+        blobs = []
+        for cnt in contours:
+            bx, by, bw, bh = cv2.boundingRect(cnt)
+            area = cv2.contourArea(cnt)
+            if area < 1500:
+                continue
+            cx_b = bx + bw // 2
+            cy_b = y1 + by + bh // 2
+            blobs.append((cx_b, cy_b, area))
+            log.debug("  Gold blob at (%d,%d) area=%.0f", cx_b, cy_b, area)
+
+        if not blobs:
+            log.debug("No chip blobs found")
+            return {}
+
+        # Sort left-to-right and assign denominations by position order
+        blobs.sort(key=lambda b: b[0])
+        chips: dict[int, Tuple[int, int]] = {}
+        for i, (cx_b, cy_b, _) in enumerate(blobs[:5]):
+            value = Layout.CHIP_VALUES[i] if i < len(Layout.CHIP_VALUES) else Layout.CHIP_VALUES[-1]
+            chips[value] = (cx_b, cy_b)
+            log.debug("Chip %d assigned at (%d,%d)", value, cx_b, cy_b)
 
         return chips
 
