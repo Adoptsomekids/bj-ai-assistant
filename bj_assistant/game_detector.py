@@ -154,22 +154,32 @@ class GameFrame:
     frame_w: int                       = 720
     frame_h: int                       = 1560
     balance: Optional[int]             = None   # player chip balance from top-left OCR
-    strip_text: str                     = ""     # raw OCR of button strip (lowercased)
+    strip_text: str                     = ""     # raw OCR of action strip y=0.877-0.962
+    bet_strip_text: str                 = ""     # raw OCR of bet-buttons strip y=0.80-0.85
 
     @property
     def bet_is_placed(self) -> bool:
         """
-        True when a bet chip is already on the table.
+        True when a bet chip is on the table (Clear/Deal buttons are active).
 
-        Authoritative signal: the action strip (y=0.877-0.962) OCR.
-          - NO bet:  strip reads '250 500 1k 2.5k sk'  (chip denominations)
-          - HAS bet: strip reads 'clear deal'           (action buttons)
+        Verified from live frame scan:
+          y=0.80-0.85 reads 'clear deal' both WITH and WITHOUT a bet placed.
+          y=0.90-0.95 reads '250 500 1k...' always (chip labels permanent).
 
-        The Clear/Deal buttons at y≈0.80 are ALWAYS visible regardless of
-        whether a bet is placed, so we cannot use that zone.
+        The ONLY reliable difference: when bet IS placed, the amount (e.g. '250')
+        appears in the bet display area at y≈0.85-0.90 as well as in the chip row.
+        When no bet: y=0.85-0.90 has no numeric bet amount shown separately.
+
+        Simplest reliable check: look for the bet-amount bubble which appears
+        above the chip row when a chip is placed. That zone (y=0.855-0.895)
+        shows a number like '250' or '500' in a highlighted bubble.
+        We detect this via the bet_strip_text field.
         """
-        # strip_text comes from the action strip (y=0.877-0.962) in detect()
-        if "clear" in self.strip_text or "deal" in self.strip_text:
+        # bet_strip_text reads y=0.688-0.715 — shows the placed bet amount
+        # (e.g. "250") when a chip is on the table, empty otherwise.
+        import re as _re
+        nums = _re.findall(r'\d+', self.bet_strip_text)
+        if any(int(n) >= 250 for n in nums if n.isdigit()):
             return True
         return False
 
@@ -258,6 +268,19 @@ class VegasBJDetector:
 
         btn_strip = self._get_button_strip(frame, w, h)
         gf.strip_text = self._ocr_text(btn_strip).lower()
+
+        # Read the bet-amount zone y=0.688-0.715 — shows placed bet amount
+        # e.g. "250" when a 250 chip is on the table, empty when no bet
+        bet_y1 = int(0.688 * h)
+        bet_y2 = int(0.718 * h)
+        bet_zone = frame[bet_y1:bet_y2, 0:w]
+        bet_big  = cv2.resize(bet_zone, None, fx=4, fy=4, interpolation=cv2.INTER_CUBIC)
+        cfg_digits = "--oem 3 --psm 7 -c tessedit_char_whitelist=0123456789"
+        gf.bet_strip_text = (
+            self._tess.image_to_string(bet_big, config=cfg_digits).strip()
+            if self._tess else ""
+        )
+
         gf.game_state = self._detect_game_state(frame, w, h)
 
         if gf.game_state in ("playing", "result"):
