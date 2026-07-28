@@ -80,13 +80,12 @@ class Layout:
         "Split":  ((12,  100, 80),  (28,  255, 255), 15000),  # orange — chip bleed <10706
     }
 
-    # Chip betting row — in the app the betting chips appear in the SAME y-band
-    # as the action buttons. During betting there are 5 chip denominations.
-    # We detect chips in a WIDER vertical band that includes both the chip row
-    # and a narrow zone above it where the current-bet chip is displayed.
-    # Chip zone: y = 75%–96% of screen height
-    CHIP_ROW_Y_TOP    = 0.750
-    CHIP_ROW_Y_BOTTOM = 0.962
+    # Chip betting row — chips appear in the BOTTOM row only.
+    # Verified positions on 1080×2340: all chips at y > 2100 (= 0.897×h).
+    # Clear/Deal buttons sit at y ≈ 1821 (= 0.778×h) — above chip row.
+    # Starting the scan at 0.88×h excludes those buttons from chip detection.
+    CHIP_ROW_Y_TOP    = 0.880   # was 0.750 — raised to exclude Clear/Deal blobs
+    CHIP_ROW_Y_BOTTOM = 0.975
     # Real chip denominations in Vegas Blackjack app (left to right)
     CHIP_VALUES  = [250, 500, 1000, 2500, 5000]
 
