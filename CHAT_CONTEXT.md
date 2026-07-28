@@ -1,6 +1,6 @@
 # BJ AI Assistant — Chat Context Backup
 
-> **Date:** 2026-07-22 (updated after live test session)
+> **Date:** 2026-07-28 (updated after extensive betting phase debugging)
 > **GitHub repo:** https://github.com/Adoptsomekids/bj-ai-assistant
 > **Local clone:** `/Users/emilio-ibm/Documents/MOD/BOB/BJ/bj-ai-assistant`
 > **Language:** Python 3.9 (venv at `.venv/`)
@@ -8,47 +8,53 @@
 
 ---
 
-## ⚠️ Bob crash prevention rules (IMPORTANT)
+## ⚠️ Bob crash prevention rules
 
 1. **NEVER display images inline** — crashes Bob immediately.
-2. **Keep responses SHORT** — one `apply_diff` at a time, no long code walls.
+2. **Keep responses SHORT** — one `apply_diff` at a time.
 3. **Read files before editing** — always `read_file` first.
-4. **Do not crash on `apply_diff`** — if context is large, read the file, then apply a minimal targeted diff.
 
 ---
 
 ## Project Goal
 
-Build an intelligent real-time BlackJack AI assistant that:
+Real-time BlackJack AI assistant:
+1. ADB screencap from Android phone over USB
+2. Detect game state (betting / playing / result)
+3. OCR hand totals from score bubbles
+4. Compute optimal action: Basic Strategy + Hi-Lo counting + Illustrious 18
+5. Show live terminal HUD (Rich)
+6. **Auto-tap**: betting → chip + Deal, playing → Hit/Stand/Double/Split, result → Deal
 
-1. **Mirrors the Android phone screen** to the Mac via USB (ADB `screencap`)
-2. **Detects the game state** from each captured frame (betting / playing / result)
-3. **Reads hand totals** from the score-bubble OCR
-4. **Computes the optimal action** using Basic Strategy (6-deck S17 DAS) + Hi-Lo + Illustrious 18
-5. **Shows a live terminal HUD** (Rich panel)
-6. **Auto-taps the phone** — betting phase (chip by TC), playing phase (Hit/Stand/Double/Split), result phase (Deal)
-
-### Full automation pipeline
+### Automation pipeline
 ```
-1. User plays the FIRST hand manually (assistant only advises)
-2. From hand #2 onwards, assistant plays ALONE:
-   betting phase  → Clear if denomination changes → tap chip by TC → tap Deal
-   playing phase  → tap optimal action (Basic Strategy + Hi-Lo + I18)
-   result phase   → tap Deal for next hand
-3. Repeats infinitely until Ctrl+C
+betting:  tap chip (TC-scaled) → wait 1.2s → tap Deal at (0.75w, 0.805h)
+playing:  tap optimal action (Basic Strategy + Hi-Lo + I18)
+result:   tap Deal at green button (bottom of screen)
+→ loops infinitely until Ctrl+C
 ```
-Bet sizing by TC: ≤1→1×  ≤2→2×  ≤3→4×  ≤4→8×  ≥5→12×
 
 ---
 
-## Target App
+## Target App / Device
 
-**"Vegas Blackjack"** (Android)
-- Rules: **Dealer Stands Soft 17, Blackjack pays 3:2**
-- Screen resolution: **1080 × 2340 px** (portrait)
-- Score bubbles: dark rounded speech-bubble above each card pile — OCR'd for totals
-- Chip values: **250, 500, 1K, 2.5K, 5K** (NOT 5/25/100/500/1000)
-- Deal button (green): at approx (870, 1994) on 1080×2340
+- **App:** Vegas Blackjack (Android), Dealer Stands Soft 17, BJ pays 3:2
+- **Resolution:** 1080 × 2340 px (portrait)
+- **Device:** serial `RZCW82D69YH`, USB debugging enabled
+- **Chip values:** 250, 500, 1000, 2500, 5000
+
+---
+
+## Setup & Run
+
+```bash
+adb devices   # → RZCW82D69YH  device
+cd ~/Documents/MOD/BOB/BJ/bj-ai-assistant
+source .venv/bin/activate
+bj-assistant run --auto-tap     # full automation
+bj-assistant run                # advise only
+bj-assistant -v debug-frame     # capture frame, print detection report
+```
 
 ---
 
@@ -57,222 +63,166 @@ Bet sizing by TC: ≤1→1×  ≤2→2×  ≤3→4×  ≤4→8×  ≥5→12×
 ```
 bj-ai-assistant/
 ├── bj_assistant/
-│   ├── __init__.py
-│   ├── capture.py          # ADB screen capture (auto-finds /opt/homebrew/bin/adb)
-│   ├── card_detector.py    # Legacy (not used in main flow)
-│   ├── game_detector.py    # ★ Vegas BJ detector (score bubbles + button colours)
-│   ├── auto_calibrate.py   # Screenshots folder → annotated debug images
-│   ├── strategy.py         # Full Basic Strategy + HiLoCounter + Illustrious 18
-│   ├── overlay.py          # TerminalHUD (Rich) + TkinterHUD (optional)
-│   ├── engine.py           # ★ Main loop: capture → detect → decide → display → tap
-│   ├── config.py           # YAML settings loader
-│   └── cli.py              # Click CLI: run / decide-cmd / count / debug-frame
-├── assets/card_templates/  # Sample screenshots (5 JPGs)
+│   ├── engine.py          ★ main loop, betting/playing/result phases
+│   ├── game_detector.py   ★ VegasBJDetector, GameFrame, Layout constants
+│   ├── overlay.py         — TerminalHUD (Rich), W/L/P stats display
+│   ├── strategy.py        — Basic Strategy tables, HiLoCounter, Illustrious 18
+│   ├── cli.py             — Click CLI: run / decide-cmd / debug-frame
+│   ├── capture.py         — ADBCapture (fails fast with clear error if no device)
+│   └── config.py
 ├── config/settings.yaml
-├── tests/
-│   ├── test_strategy.py    # 29 unit tests — ALL PASS
-│   └── test_capture.py
-├── pyproject.toml
-├── setup.py
-├── requirements.txt
-└── README.md
+├── tests/test_strategy.py  (29 passing)
+└── CHAT_CONTEXT.md
 ```
 
 ---
 
-## Layout Constants (game_detector.py — 1080×2340)
+## Layout Constants (game_detector.py — verified on 1080×2340)
 
-| Region | cx/cy fraction | Notes |
-|---|---|---|
-| Dealer score bubble | cx=0.500, cy=0.186 | Dark speech bubble, shows dealer total |
-| Player score bubble | cx=0.500, cy=0.708 | Dark speech bubble, shows player total |
-| Bubble OCR radius | 0.048 × width ≈ 52px | Inner crop = 0.70× radius |
-| Dealer upcard rank | x=0.213, y=0.214 | Top-left corner of top dealer card |
-| Player card rank | x=0.213, y=0.513 | Top-left corner of top player card |
-| Button row | y: 0.880–0.960 | Stand / Hit / Double / Split |
-| Deal button | y: 0.80–0.965, full width | Detected in extended zone |
-| Clear button | y: 0.82–0.88 | Betting phase |
-
----
-
-## Button Color Detection (HSV ranges)
-
-| Button | HSV Low | HSV High | Color |
+| Region | Fraction | Absolute px | Notes |
 |---|---|---|---|
-| Stand | (0,100,80) | (12,255,255) | Red |
-| Hit | (50,60,80) | (90,255,255) | Green |
-| Double | (95,80,80) | (135,255,255) | Blue |
-| Split | (12,100,80) | (28,255,255) | Orange |
+| Dealer bubble | cx=0.500, cy=0.186 | (540,436) | score bubble OCR |
+| Player bubble | cx=0.500, cy=0.708 | (540,1657) | score bubble OCR |
+| Button row | y=0.877–0.962 | 2052–2251 | Stand/Hit/Double/Split |
+| Chip row | y=0.880–0.975 | 2059–2281 | 250/500/1K/2.5K/5K chips |
+| Balance | x=0.10–0.42, y=0.025–0.115 | | `max()` of OCR candidates |
+| Clear button | x=0.25w, y=0.805h | (270,1883) | fixed position |
+| **Deal button** | **x=0.75w, y=0.805h** | **(810,1883)** | **fixed position — verified** |
+| Bet amount zone | y=0.688–0.718 | 1609–1680 | shows "250" when chip on table |
 
-State detection order (current, working):
-1. Strip OCR FIRST: if `'clear'` or `'deal'` → `betting`
-2. `_colour_buttons_visible()`: if ≥2 HSV colours detected → `playing`
-3. Result overlay OCR: "dealer wins"/"player wins"/"push"/"bust" → `result`
-4. Strip OCR action words → `playing`
-5. Default → `betting`
-
----
-
-## Detector Accuracy (5 test screenshots — ALL PASS ✅)
-
-| Screenshot | State | Dealer | Player | Buttons |
-|---|---|---|---|---|
-| 015520 (2+J vs 10♦) | playing ✅ | 10 ✅ | 12 ✅ | Stand/Hit/Double/Split ✅ |
-| 015611 (J+J vs 2♠) | playing ✅ | 2 ✅ | 20 ✅ | Stand/Hit/Double/Split ✅ |
-| 015602 (Dealer Wins) | result ✅ | 21 ✅ | 20 ✅ | — ✅ |
-| 015503 (Place Bet) | betting ✅ | — ✅ | — ✅ | — ✅ |
-| 015512 (Deal screen) | betting ✅ | — ✅ | — ✅ | — ✅ |
+### Chip positions (detected by gold blob in y=0.880–0.975)
+| Chip | Typical x | Typical y |
+|---|---|---|
+| 250 | 65 | 2224 |
+| 500 | 161 | 2126 |
+| 1000 | ~729 | ~2116 |
+| 2500 | ~918 | ~2126 |
 
 ---
 
-## Strategy Engine
+## Button Color Detection (HSV)
 
-- **Tables:** Hard 5–21, Soft A+2 through A+9, Pairs 2–A (6-deck S17 DAS)
-- **Hi-Lo counting:** running count + true count (running ÷ decks remaining)
-- **Bet sizing:** 1× (TC≤1) → 2× (TC≤2) → 4× (TC≤3) → 8× (TC≤4) → 12× (TC≥5)
-- **Illustrious 18 deviations:** Stand 16v10 at TC≥0, Double 11vA at TC≥+1, etc.
-- **Actions:** H=Hit, S=Stand, D=Double, P=Split, R=Surrender(→Hit fallback)
+| Button | HSV Low | HSV High | Min px |
+|---|---|---|---|
+| Stand | (0,100,80) | (12,255,255) | 5000 |
+| Hit | (50,60,80) | (90,255,255) | 400 |
+| Double | (95,80,80) | (135,255,255) | 5000 |
+| Split | (12,100,80) | (28,255,255) | 15000 |
 
----
-
-## Setup & Run
-
-```bash
-# Prerequisites (already installed)
-brew install android-platform-tools tesseract scrcpy
-
-# Project
-cd ~/Documents/MOD/BOB/BJ/bj-ai-assistant
-source .venv/bin/activate     # Python 3.9 venv
-
-# Verify phone connected
-adb devices   # should show RZCW82D69YH  device
-
-# Run live assistant (terminal HUD)
-bj-assistant run
-
-# With auto-tap
-bj-assistant run --auto-tap
-
-# With verbose debug logging
-bj-assistant run -v
-
-# Debug one frame (saves PNG to /tmp/, prints text table)
-bj-assistant -v debug-frame
-
-# One-shot decision (no phone needed)
-bj-assistant decide-cmd --player "A 6" --dealer 5
-```
+Playing state primary detector: bright-green Hit px ≥ 3000.
 
 ---
 
-## engine.py — Key Logic (current)
+## Betting Phase — Final Working Design
 
+### `_place_bet()` — atomic sequence
 ```python
-_tick():
-  1. gf = detector.detect(frame)
-  2. if game_state == "result":
-       if started_mid_hand and not hand_counted → hands_completed += 1
-       if hand_counted → hands_completed += 1, reset state
-       if auto_tap and hands_completed >= 1 → tap Deal
-  3. if game_state == "betting":
-       update HUD (TC, bet units)
-       if auto_tap and hands_completed >= 1 → _place_bet(gf)
-  4. if not gf.is_actionable → return
-  5. noise filter: player_total not in 4-21 → return
-  6. hi-lo count once per new hand
-  7. build player_cards:
-       rank OCR available  → use directly
-       soft 12-21          → ["A", str(total-11)]
-       total==11, not soft → ["A"]  (single Ace, treat as soft)
-       hard 12-21          → ["10", str(total-10)]
-       hard 4-11           → ["2",  str(total-2)]
-  8. decide(state) → decision dict
-  9. decision["player_display"] = f"{total}{'s' if soft else ''}"
- 10. overlay.update(decision)
- 11. if auto_tap → _execute_action(decision, gf)
+1. Compute desired = _target_bet_amount(gf.balance)
+   TC≤1→250, TC≤2→500, TC≤3→500, TC≤4→1000, TC≥5→2500
+   Capped to balance (safe_default=250 if balance unknown)
+2. Pick closest chip ≤ desired from gf.chips
+3. Tap chip at detected position
+4. Sleep 1.2s  (app animation time)
+5. Tap Deal at FIXED position (0.75w, 0.805h) = (810, 1883)
+6. _bet_placed=True, _bet_phase_entered=0.0
+```
 
-overlay.py:
-  - reads player_display (e.g. "6", "18s", "11s")
-  - NEVER shows raw synthetic card components
+### Why fixed Deal position
+- `_detect_deal_button` (color-based) finds green blob at (350,2161) which is NOT the Deal button — it's part of the chip area.
+- The real Deal button (dark background, white text "DEAL") is always at (0.75w, 0.805h) after a chip is tapped.
+- Verified from live OCR: `y=0.80-0.85 right half → 'deal'` at x≈0.75.
+
+### bet_is_placed detection (not used for tapping anymore)
+- Was: OCR of various zones — all unreliable
+- Strip `y=0.877` always shows `'250 500 1k...'` regardless
+- Zone `y=0.80` always shows `'clear deal'` regardless
+- Bet amount at `y=0.688` works but OCR unreliable
+- **Current approach: atomic tap in `_place_bet`, no polling needed**
+
+---
+
+## engine.py Key Logic
+
+```
+_tick():
+  result:  parse win/loss/push → W/L/P stats → auto-tap Deal (green)
+  betting: if not _bet_placed AND chips visible → _place_bet()
+  playing: noise filter → hi-lo count → decide → HUD → tap action
+
+_place_bet():
+  tap chip → sleep 1.2s → tap Deal(810,1883) → _bet_placed=True
+
+_execute_action():
+  TAP_COOLDOWN=2.5s, de-dup by (player_total, dealer_total)
+  Surrender→Hit fallback
 ```
 
 ---
 
-## HUD Display Format
+## HUD Display
 
 ```
-╭──────── ♠ BJ AI Assistant ─────────╮
-│   🎯 HIT    You: 11   │ Dealer: 7  │
-│   True Count: +0.2  Running: +1    │
-│   Bet: 1× unit                     │
-│   Hard 11 vs dealer 7 → Hit        │
+╭──── ♠ BJ AI Assistant ─────────────╮
+│  🎯 HIT    You: 11   │ Dealer: 6   │
+│  TC: +1.2  RC: +6        Bet: 2×   │
+│  W:3 L:2 P:1 #6    Hard 11 vs 6   │
 ╰────────────────────────────────────╯
 ```
-- `You: 16` = hard 16
-- `You: 18s` = soft 18 (Ace + 7)
-- `You: 11s` = single Ace showing (soft 11)
+- `You: 16` = hard 16, `You: 18s` = soft 18, `You: 11s` = Ace alone
 
 ---
 
-## Known Issues / Bugs / Fixes
+## Fixes History (chronological)
 
-| Issue | Root Cause | Fix Applied | Status |
-|---|---|---|---|
-| `You: -1 2` in HUD | OCR reads `player_total=1` during deal animation; synthetic hand: `high=1-10=-1` | Noise filter: reject `player_total < 4` | ✅ Fixed |
-| `You: 4 2` in HUD | HUD showed raw synthetic card components, not bubble total | Added `player_display` key; overlay uses it | ✅ Fixed |
-| Hard 4-11 synthetic had negative rank | `make_cards(total)` for total<12: `high=total-10` goes negative | Use `["2", str(total-2)]` for hard 4-11 | ✅ Fixed |
-| `You: As` (single Ace) | `player_total=11, is_soft=False` → built wrong hard-11 hand | Special-case: `total==11, not soft → ["A"], is_soft=True` | ✅ Fixed |
-| `You: 2` in HUD | OCR reads `player_total=2` mid-animation | Same noise filter (rejects <4) | ✅ Fixed |
-| Surrender → Stand fallback | Strategy returns "R" but app has no Surrender button | `_ACTION_TO_BUTTON["R"]="Surrender"` with cascade to Hit | ✅ Fixed |
-| Auto-tap multi-tap (5x/hand) | No de-duplication | Hand tuple + 2.5s cooldown | ✅ Fixed |
-| `state=betting` false positive | OCR unreliable on live frame → fell to default `"betting"` | `_colour_buttons_visible()` as primary detector | ✅ Fixed |
-| `hands_completed` stuck at 0 | `started_mid_hand` path didn't increment when `hand_counted=False` | Result phase: if `started_mid_hand and not hand_counted` → increment | ✅ Fixed |
-| Chip denominations wrong | Detector assigned [5,25,100,500,1000] but app uses [250,500,1K,2.5K,5K] | ⚠️ Not yet fixed — chip OCR reads '250 500 1k 2.5k sk' from strip |
-| `_detect_dark_buttons` finds 1 blob | Area threshold too high | ⚠️ Not yet fixed — Deal button IS detected by colour at (870,1994) |
+| Bug | Fix |
+|---|---|
+| `You: -1 2` — OCR noise | Noise filter: reject player_total < 4 |
+| Dealer Ace shows as `1` | `dealer_total==1 → "A"` in `effective_dealer_upcard` |
+| Partial rank OCR (A+9 → total=11) | Validate `hand_total(ranks)==bubble_total` before using ranks |
+| No phone connected → macOS screencap | `get_best_capture` fails fast with clear ADB error message |
+| `hands_completed` stuck at 0 | Removed first-hand gate; `_result_handled` flag per result screen |
+| Chip denominations wrong (5/25/100) | `CHIP_VALUES=[250,500,1000,2500,5000]` |
+| Chip zone included Clear/Deal blobs | `CHIP_ROW_Y_TOP=0.880` (was 0.750) excludes y≈1821 buttons |
+| Clear/Deal Canny detection unreliable | Use fixed positions (0.25w,0.805h) and (0.75w,0.805h) |
+| Deal tap opened store (wrong coords) | Deal at fixed (0.75w,0.805h), NOT color-detected blob |
+| Double chip tap (250+500=750) | `_place_bet` atomic: chip + 1.2s sleep + Deal; no re-entry |
+| `bet_is_placed` always True/False | Replaced with atomic `_place_bet` — no OCR polling needed |
+| Balance OCR reads `41,507` vs `4,501` | `max(candidates)` from x=0.10-0.42 region |
+| Balance unknown → unbound bet | Safe cap: `desired=250` when `balance=None` |
+| Game not in foreground → blind tap | Guard: skip bet if `strip_text=''` AND no chips AND no bet |
 
 ---
 
-## Remaining Issues (next to fix)
+## Known Remaining Issues
 
-### 1. Chip denomination values wrong
-`_CHIP_VALUES_DESC = [1000, 500, 100, 25, 5]` — wrong.
-App uses `[5000, 2500, 1000, 500, 250]`.
-The strip OCR already reads `'250 500 1k 2.5k sk'` — parse these values.
-**Fix:** In `_place_bet`, use the OCR'd chip values from `gf.chips` keys directly (the detector populates those from blob colours). Update `_CHIP_VALUES_DESC` to match real app values.
-
-### 2. `_detect_dark_buttons` unreliable (1 blob found, needs 2)
-The Deal button at `(870, 1994)` IS detected by the colour method.
-**Fix:** Lower Canny area threshold OR trust the colour method and skip `_detect_dark_buttons` for the Deal button.
-
-### 3. `True Count: +0.2` is stuck / not updating visibly
-This is likely correct — TC = running_count / decks_remaining. At the start with few cards seen, RC is small and decks_remaining ≈ 6, so TC ≈ 0. Not a bug.
+1. **Balance OCR unreliable**: reads `1,501` instead of `4,501` due to coin icon at x<0.17. `max(candidates)` helps but may still be off. Not critical — bet cap uses conservative values.
+2. **result phase Deal detection**: uses `_detect_deal_button` (green blob) which finds (350,2161). This works for the post-result Deal but may need the same fixed-position approach if it fails.
+3. **Win/Loss/Push stats**: OCR of result banner reads `'dealer wins'`/`'you win'` etc. May miss some results at 5fps.
 
 ---
 
 ## Phone Info
 
-- **Device serial:** `RZCW82D69YH`
-- **OS:** Android (USB Debugging enabled)
-- **Connection:** USB-C cable
+- **Serial:** `RZCW82D69YH`
 - **Verify:** `adb devices` → `RZCW82D69YH  device`
 
 ---
 
-## GitHub Commits
+## Recent Git Commits
 
 | Commit | Description |
 |---|---|
-| `0b4509a` | Initial scaffold — all modules, README, 29 tests |
-| `e6b67d8` | Game-specific Vegas BJ detector — 5/5 screenshots pass |
-| `7045e5d` | Python 3.9 compat fixes, drop pure-python-adb, add setup.py |
-| `7898720` | Rich terminal HUD, --verbose on run, auto-resolve brew paths |
-| `4d97e08` | fix: betting loop infinite, chip detection robustness |
-| `01ec8db` | feat: first-hand manual gate, denomination change with Clear |
-| `ab29879` | feat: dark button detection, mid-hand start recovery |
-| `9e537bd` | fix: OCR strip checked FIRST in state detection |
-| *(uncommitted)* | fix: noise filter, player_display, safe synthetic hand builder |
+| `fe49d32` | fix: atomic bet — chip + 1.2s wait + Deal at fixed position |
+| `c38e772` | fix: two-phase bet attempt (superseded by fe49d32) |
+| `01cf250` | fix: bet_is_placed uses action strip OCR |
+| `66ff95d` | fix: skip bet when game not in foreground |
+| `fc38101` | fix: Clear/Deal by OCR at y=0.77-0.84 |
+| `783dd23` | fix: balance OCR x=0.17-0.32; safe cap when unknown |
+| `b5caa9f` | fix: chip zone y=0.88 excludes Clear/Deal buttons |
+| `3f6977e` | fix: dealer Ace bubble reads as 1; partial rank OCR |
+| `d95ffaf` | fix: auto-play immediate; W/L/P session stats |
+| `c36a6da` | fix: fail fast when phone not connected |
 
 ---
 
-*This file is a backup. If chat is lost, open a new Bob session and reference this file.*
+*Backup. Open new Bob session, reference this file, continue.*
