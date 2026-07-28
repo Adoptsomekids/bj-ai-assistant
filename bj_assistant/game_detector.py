@@ -152,6 +152,7 @@ class GameFrame:
     # "betting" | "playing" | "result" | "unknown"
     frame_w: int                       = 720
     frame_h: int                       = 1560
+    balance: Optional[int]             = None   # player chip balance from top-left OCR
 
     @property
     def effective_dealer_upcard(self) -> Optional[str]:
@@ -258,6 +259,9 @@ class VegasBJDetector:
                 gf.deal_btn = gf.dark_btns["Deal"]
             if "Clear" in gf.dark_btns:
                 gf.clear_btn = gf.dark_btns["Clear"]
+
+        # Always read balance (visible in all states at top-left)
+        gf.balance = self._read_balance(frame, w, h)
 
         log.debug(
             "Frame: state=%s dealer=%s player=%s(%s) upcard=%s btns=%s chips=%s",
@@ -546,6 +550,40 @@ class VegasBJDetector:
 
     def _detect_soft(self, ranks: List[str]) -> bool:
         return "A" in [r.upper() for r in ranks]
+
+    # ------------------------------------------------------------------
+    # Balance OCR (top-left of screen)
+    # ------------------------------------------------------------------
+
+    def _read_balance(self, frame: np.ndarray, w: int, h: int) -> Optional[int]:
+        """
+        Read the player's chip balance from the top-left corner of the screen.
+        Verified position on 1080×2340: x=0–35%, y=3–10% → reads e.g. '1,507'
+        """
+        x1, y1 = 0,            int(0.030 * h)
+        x2, y2 = int(0.38 * w), int(0.105 * h)
+        roi = frame[y1:y2, x1:x2]
+        if roi.size == 0:
+            return None
+        big = cv2.resize(roi, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+        cfg = "--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789,."
+        text = self._tess.image_to_string(big, config=cfg).strip() if self._tess else ""
+        # Find the largest number in the text (may read multiple numbers)
+        candidates = []
+        for tok in re.findall(r'[\d,]+', text):
+            try:
+                candidates.append(int(tok.replace(",", "")))
+            except ValueError:
+                pass
+        if not candidates:
+            log.debug("_read_balance: no number found in %r", text)
+            return None
+        val = max(candidates)
+        if val < 100 or val > 10_000_000:
+            log.debug("_read_balance: implausible value %d from %r", val, text)
+            return None
+        log.debug("_read_balance: %d (raw=%r)", val, text)
+        return val
 
     # ------------------------------------------------------------------
     # Chip detection (betting phase)

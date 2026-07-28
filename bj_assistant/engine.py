@@ -368,53 +368,61 @@ class BJEngine:
     # Bet placement (betting phase)
     # ------------------------------------------------------------------
 
-    def _target_bet_taps(self) -> tuple:
+    def _target_bet_amount(self, balance: Optional[int]) -> int:
         """
-        Return (chip_index, taps) based on current true count.
+        Return the desired bet amount (in chip denomination units) based on TC.
+        Capped to the available balance so we never open the store.
 
-        Chip indices map to CHIP_VALUES = [250, 500, 1000, 2500, 5000].
-        Bet sizing (1 unit = 1× base chip = 250):
-          TC ≤ 1  →  1 tap of 250   (bet 250)
-          TC ≤ 2  →  2 taps of 250  (bet 500)
-          TC ≤ 3  →  1 tap of 1000  (bet 1000)
-          TC ≤ 4  →  1 tap of 2500  (bet 2500)
-          TC ≥ 5  →  1 tap of 5000  (bet 5000)
+        Bet schedule (1 unit = 250):
+          TC ≤ 1  →  250
+          TC ≤ 2  →  500
+          TC ≤ 3  →  500
+          TC ≤ 4  → 1000
+          TC ≥ 5  → 2500
         """
         tc = self._counter.true_count()
-        if tc <= 1:   return (0, 1)   # 250 × 1
-        elif tc <= 2: return (0, 2)   # 250 × 2
-        elif tc <= 3: return (1, 1)   # 500 × 1  (≈ 2 units)
-        elif tc <= 4: return (2, 1)   # 1000 × 1 (≈ 4 units)
-        else:         return (3, 1)   # 2500 × 1 (≈ 10 units)
+        if tc <= 1:   desired = 250
+        elif tc <= 2: desired = 500
+        elif tc <= 3: desired = 500
+        elif tc <= 4: desired = 1000
+        else:         desired = 2500
+
+        if balance is not None and desired > balance:
+            # Find the largest chip we can afford
+            from .game_detector import Layout
+            affordable = [v for v in Layout.CHIP_VALUES if v <= balance]
+            desired = affordable[-1] if affordable else Layout.CHIP_VALUES[0]
+            log.info("Auto-bet: balance %d < desired %d → capping to %d",
+                     balance, desired, desired)
+
+        return desired
 
     def _place_bet(self, gf: GameFrame) -> None:
         """
-        Place the optimal bet based on the current true count.
+        Place the optimal bet based on TC, capped to available balance.
 
         Flow:
-          1. Pick chip index + taps from TC.
-          2. Find that chip in gf.chips by denomination.
-          3. Tap chip N times, then tap Deal.
+          1. Compute desired bet amount (capped by balance).
+          2. Find closest chip denomination in gf.chips.
+          3. Tap chip once, then tap Deal.
         """
         if not self._adb or not gf.chips:
             log.debug("_place_bet: no adb or no chips detected")
             return
 
-        chip_idx, taps = self._target_bet_taps()
-        from .game_detector import Layout
-        # Map chip index to denomination
-        target_denom = Layout.CHIP_VALUES[chip_idx] if chip_idx < len(Layout.CHIP_VALUES) else Layout.CHIP_VALUES[0]
-
-        # Find closest available chip denomination (in case some are missing)
+        desired = self._target_bet_amount(gf.balance)
         available = sorted(gf.chips.keys())
-        chosen = min(available, key=lambda v: abs(v - target_denom))
+
+        # Pick the chip closest to (but not exceeding) desired
+        affordable = [v for v in available if v <= desired]
+        chosen = affordable[-1] if affordable else available[0]
         tc = self._counter.true_count()
-        log.info("Auto-bet: TC=%.1f → chip %d × %d taps", tc, chosen, taps)
+        bal_str = f"bal={gf.balance}" if gf.balance else "bal=?"
+        log.info("Auto-bet: TC=%.1f %s → chip %d", tc, bal_str, chosen)
 
         x, y = gf.chips[chosen]
-        for i in range(taps):
-            self._adb.tap(x, y)
-            time.sleep(0.4)
+        self._adb.tap(x, y)
+        time.sleep(0.5)
 
         self._last_bet_denomination = chosen
         self._bet_placed            = True
