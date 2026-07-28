@@ -198,22 +198,29 @@ class BJEngine:
                     "losses": self._losses,
                     "pushes": self._pushes,
                 })
-            # Auto-bet immediately (no first-hand gate)
+            # Auto-bet immediately
             if self._auto_tap and self._adb and not self._bet_placed:
-                if gf.chips:
-                    self._place_bet(gf)
-                elif gf.deal_btn:
-                    # No chips but Deal button visible → a bet is already placed.
-                    # Just tap Deal to start the hand.
+                # Presence of both Clear AND Deal dark buttons means a bet is
+                # already on the table — skip chip tap, go straight to Deal.
+                bet_already_placed = (
+                    gf.clear_btn is not None and gf.deal_btn is not None
+                )
+
+                if bet_already_placed:
+                    # Bet already on table — just tap Deal
                     now2 = time.monotonic()
                     if now2 - self._last_tap_time > self._TAP_COOLDOWN:
-                        log.info("Auto-bet: no chips but Deal visible → tapping Deal at (%d,%d)", *gf.deal_btn)
+                        log.info("Auto-bet: bet already placed → tapping Deal at (%d,%d)",
+                                 *gf.deal_btn)
                         self._adb.tap(*gf.deal_btn)
                         self._last_tap_time = now2
                         self._bet_placed = True
                         self._bet_phase_entered = 0.0
+                elif gf.chips:
+                    # No existing bet — place one now
+                    self._place_bet(gf)
                 elif now - self._bet_phase_entered > 8.0:
-                    # Absolute fallback after 8s
+                    # Absolute fallback after 8s with no chips detected
                     cx = gf.frame_w // 2
                     cy = int(0.919 * gf.frame_h)
                     log.warning("Auto-bet fallback: tapping center (%d,%d)", cx, cy)
