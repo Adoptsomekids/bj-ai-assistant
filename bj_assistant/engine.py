@@ -182,10 +182,9 @@ class BJEngine:
             now = time.monotonic()
             if self._bet_phase_entered == 0.0:
                 self._bet_phase_entered = now
-                # Only reset bet_placed if we don't already see a live bet.
-                # If Clear+Deal are visible a bet is already on the table —
-                # don't reset so we don't try to add more chips.
-                if not (gf.clear_btn and gf.deal_btn):
+                # Only reset bet_placed if no bet is currently on the table.
+                # If OCR sees 'clear'+'deal' in strip, a bet is already placed.
+                if not gf.bet_is_placed:
                     self._bet_placed = False
 
             tc  = self._counter.true_count()
@@ -204,13 +203,7 @@ class BJEngine:
                 })
             # Auto-bet immediately
             if self._auto_tap and self._adb and not self._bet_placed:
-                # Presence of both Clear AND Deal dark buttons means a bet is
-                # already on the table — skip chip tap, go straight to Deal.
-                bet_already_placed = (
-                    gf.clear_btn is not None and gf.deal_btn is not None
-                )
-
-                if bet_already_placed:
+                if gf.bet_is_placed:
                     # Bet already on table — just tap Deal
                     now2 = time.monotonic()
                     if now2 - self._last_tap_time > self._TAP_COOLDOWN:

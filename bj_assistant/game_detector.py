@@ -152,6 +152,16 @@ class GameFrame:
     frame_w: int                       = 720
     frame_h: int                       = 1560
     balance: Optional[int]             = None   # player chip balance from top-left OCR
+    strip_text: str                     = ""     # raw OCR of button strip (lowercased)
+
+    @property
+    def bet_is_placed(self) -> bool:
+        """True when a bet chip is already on the table (Clear+Deal buttons visible)."""
+        # Authoritative: OCR reads 'clear' and 'deal' in the strip
+        if "clear" in self.strip_text and "deal" in self.strip_text:
+            return True
+        # Fallback: both dark buttons detected by Canny
+        return "Clear" in self.dark_btns and "Deal" in self.dark_btns
 
     @property
     def effective_dealer_upcard(self) -> Optional[str]:
@@ -236,6 +246,8 @@ class VegasBJDetector:
         h, w = frame.shape[:2]
         gf = GameFrame(frame_w=w, frame_h=h)
 
+        btn_strip = self._get_button_strip(frame, w, h)
+        gf.strip_text = self._ocr_text(btn_strip).lower()
         gf.game_state = self._detect_game_state(frame, w, h)
 
         if gf.game_state in ("playing", "result"):
@@ -249,15 +261,17 @@ class VegasBJDetector:
             gf.buttons = self._detect_buttons(frame, w, h)
 
         if gf.game_state in ("betting", "result"):
-            gf.chips      = self._detect_chips(frame, w, h)
-            gf.deal_btn   = self._detect_deal_button(frame, w, h)
-            gf.clear_btn  = self._detect_clear_button(frame, w, h)
-            gf.dark_btns  = self._detect_dark_buttons(frame, w, h)
-            # Prefer dark_btns positions over colour-based detection
-            if "Deal" in gf.dark_btns:
-                gf.deal_btn = gf.dark_btns["Deal"]
-            if "Clear" in gf.dark_btns:
+            gf.chips     = self._detect_chips(frame, w, h)
+            gf.dark_btns = self._detect_dark_buttons(frame, w, h)
+            # Use dark_btns (Canny edge detected) for Clear/Deal positions
+            # Only trust these when BOTH are found — single blob = false positive
+            if "Clear" in gf.dark_btns and "Deal" in gf.dark_btns:
                 gf.clear_btn = gf.dark_btns["Clear"]
+                gf.deal_btn  = gf.dark_btns["Deal"]
+            else:
+                # No confirmed Clear+Deal pair → fall back to colour-based
+                gf.deal_btn  = self._detect_deal_button(frame, w, h)
+                gf.clear_btn = self._detect_clear_button(frame, w, h)
 
         # Always read balance (visible in all states at top-left)
         gf.balance = self._read_balance(frame, w, h)
