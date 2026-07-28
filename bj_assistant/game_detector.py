@@ -89,13 +89,15 @@ class Layout:
     # Real chip denominations in Vegas Blackjack app (left to right)
     CHIP_VALUES  = [250, 500, 1000, 2500, 5000]
 
-    # Betting screen dark buttons ("Clear" / "Deal") — appear when a bet is placed
-    # These buttons have very dark (near-black) backgrounds with white text.
-    # Detected by Canny edge blobs in the btn strip, not by HSV colour.
-    # From live frame analysis: Clear≈(410,2124), Deal≈(670,2124), y≈0.908
-    # We just find the two largest rectangular blobs in the strip via Canny.
-    DARK_BTN_Y_TOP    = 0.877
-    DARK_BTN_Y_BOTTOM = 0.962
+    # Betting screen Clear/Deal buttons — appear when a bet chip is placed.
+    # Verified from live OCR scan: Clear at y≈0.80, Deal at y≈0.80 (above chip row).
+    #   Clear: x=0–50%,  y=78–83%  → centre ≈ (270, 1880) on 1080×2340
+    #   Deal:  x=50–100%, y=78–83% → centre ≈ (810, 1880) on 1080×2340
+    DARK_BTN_Y_TOP    = 0.770
+    DARK_BTN_Y_BOTTOM = 0.840
+    DARK_BTN_CLEAR_X  = 0.25   # centre x of Clear button
+    DARK_BTN_DEAL_X   = 0.75   # centre x of Deal button
+    DARK_BTN_CY_FRAC  = 0.805  # centre y of both buttons
 
     # Game state detection — result overlay text region
     # IMPORTANT: must NOT overlap the permanent felt text:
@@ -671,53 +673,35 @@ class VegasBJDetector:
         self, frame: np.ndarray, w: int, h: int
     ) -> "dict[str, Tuple[int,int]]":
         """
-        Detect the dark-background "Clear" and "Deal" buttons that appear
-        on the betting screen after a bet chip is placed.
+        Detect the Clear and Deal buttons by OCR-ing the strip where they appear.
 
-        These buttons have near-black backgrounds (V < 40) — not detectable
-        by HSV colour matching. We find rectangular blobs in the button strip
-        using Canny edge detection, sort them left-to-right, and label them
-        Clear (left) and Deal (right).
+        Verified layout (1080×2340):
+          Clear: x=0–50%,   y=77–84%  → centre ≈ (270, 1880)
+          Deal:  x=50–100%, y=77–84%  → centre ≈ (810, 1880)
+
+        We use OCR to confirm 'clear' and 'deal' text, then return the
+        hardcoded centres (much more reliable than Canny blob detection).
         """
         y1 = int(Layout.DARK_BTN_Y_TOP    * h)
         y2 = int(Layout.DARK_BTN_Y_BOTTOM * h)
-        strip = frame[y1:y2, 0:w]
-        gray  = cv2.cvtColor(strip, cv2.COLOR_BGR2GRAY)
+        mid = w // 2
+        cy  = int(Layout.DARK_BTN_CY_FRAC * h)
 
-        # Canny edges find button outlines even on dark backgrounds
-        edges = cv2.Canny(gray, 25, 80)
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (4, 4))
-        edges  = cv2.dilate(edges, kernel, iterations=2)
+        left_strip  = frame[y1:y2, 0:mid]
+        right_strip = frame[y1:y2, mid:w]
 
-        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL,
-                                       cv2.CHAIN_APPROX_SIMPLE)
-        # Collect button-sized rectangular blobs
-        blobs = []
-        strip_h = y2 - y1
-        for cnt in contours:
-            bx, by, bw, bh = cv2.boundingRect(cnt)
-            area = bw * bh
-            aspect = bw / max(bh, 1)
-            # Button shape: wider than tall, minimum size
-            if area < int(0.03 * w * strip_h):
-                continue
-            if not (1.0 < aspect < 5.0):
-                continue
-            cx = bx + bw // 2
-            cy = y1 + by + bh // 2
-            blobs.append((cx, cy, area))
+        left_text  = self._ocr_text(left_strip).lower()
+        right_text = self._ocr_text(right_strip).lower()
+        log.debug("_detect_dark_buttons: left=%r right=%r", left_text[:40], right_text[:40])
 
-        if len(blobs) < 2:
-            log.debug("_detect_dark_buttons: found %d blobs (need ≥2)", len(blobs))
-            return {}
-
-        # Sort left-to-right — leftmost = Clear, rightmost = Deal
-        blobs.sort(key=lambda b: b[0])
         result: dict[str, Tuple[int, int]] = {}
-        result["Clear"] = (blobs[0][0],  blobs[0][1])
-        result["Deal"]  = (blobs[-1][0], blobs[-1][1])
-        log.debug("Dark btns: Clear=(%d,%d) Deal=(%d,%d)",
-                  *result["Clear"], *result["Deal"])
+        if "clear" in left_text:
+            result["Clear"] = (int(Layout.DARK_BTN_CLEAR_X * w), cy)
+        if "deal" in right_text:
+            result["Deal"]  = (int(Layout.DARK_BTN_DEAL_X  * w), cy)
+
+        if result:
+            log.debug("Dark btns found: %s", {k: v for k, v in result.items()})
         return result
 
     def _detect_deal_button(
