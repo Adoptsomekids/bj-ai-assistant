@@ -391,13 +391,14 @@ class BJEngine:
         elif tc <= 4: desired = 1000
         else:         desired = 2500
 
-        if balance is not None and desired > balance:
-            # Find the largest chip we can afford
-            from .game_detector import Layout
-            affordable = [v for v in Layout.CHIP_VALUES if v <= balance]
-            desired = affordable[-1] if affordable else Layout.CHIP_VALUES[0]
-            log.info("Auto-bet: balance %d < desired %d → capping to %d",
-                     balance, desired, desired)
+        # Cap to balance — if balance unknown, always bet minimum (safe default)
+        from .game_detector import Layout
+        cap = balance if (balance is not None and balance >= 250) else 250
+        if desired > cap:
+            affordable = [v for v in Layout.CHIP_VALUES if v <= cap]
+            capped = affordable[-1] if affordable else Layout.CHIP_VALUES[0]
+            log.info("Auto-bet: capping %d → %d (balance=%s)", desired, capped, balance)
+            desired = capped
 
         return desired
 

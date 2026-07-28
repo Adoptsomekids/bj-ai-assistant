@@ -570,24 +570,23 @@ class VegasBJDetector:
 
     def _read_balance(self, frame: np.ndarray, w: int, h: int) -> Optional[int]:
         """
-        Read the player's chip balance from the top-left corner of the screen.
-        Verified position on 1080×2340: x=0–35%, y=3–10% → reads e.g. '1,507'
+        Read the player's chip balance from the top-left corner.
+        Verified on 1080×2340: the number "1,507" sits at x≈0.12–0.30, y=3–10%.
+        A coin/medal icon to the left causes OCR to prepend junk digits.
+        Fix: scan only x=12%–32% to skip the icon.
         """
-        x1, y1 = 0,             int(0.030 * h)
-        x2, y2 = int(0.35 * w), int(0.105 * h)
+        x1, y1 = int(0.17 * w), int(0.030 * h)
+        x2, y2 = int(0.32 * w), int(0.110 * h)
         roi = frame[y1:y2, x1:x2]
         if roi.size == 0:
             return None
-        big = cv2.resize(roi, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+        big = cv2.resize(roi, None, fx=5, fy=5, interpolation=cv2.INTER_CUBIC)
         cfg = "--oem 3 --psm 7 -c tessedit_char_whitelist=0123456789,"
         text = self._tess.image_to_string(big, config=cfg).strip() if self._tess else ""
-        # Extract all comma-formatted numbers (e.g. "1,507")
-        # psm 7 = single line → usually gives cleaner output
         candidates = []
         for tok in re.findall(r'\d[\d,]*', text):
             try:
                 val = int(tok.replace(",", ""))
-                # Valid balance range: 250 (min bet) to 9,999,999
                 if 250 <= val <= 9_999_999:
                     candidates.append(val)
             except ValueError:
@@ -595,9 +594,8 @@ class VegasBJDetector:
         if not candidates:
             log.debug("_read_balance: no valid number in %r", text)
             return None
-        # Pick the smallest valid candidate — OCR garbage tends to be larger
-        # (e.g. reads "41,501" when actual is "1,501")
-        val = min(candidates)
+        # Prefer the first token — that's the actual balance number
+        val = candidates[0]
         log.debug("_read_balance: %d (raw=%r)", val, text)
         return val
 
