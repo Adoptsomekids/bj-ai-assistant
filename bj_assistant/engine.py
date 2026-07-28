@@ -368,75 +368,60 @@ class BJEngine:
     # Bet placement (betting phase)
     # ------------------------------------------------------------------
 
-    # Chip value → how many taps of that chip denomination to bet N units.
-    # TC-based units: 1,2,4,8,12 → we tap the largest chip that fits.
-    _CHIP_VALUES_DESC = [1000, 500, 100, 25, 5]
+    def _target_bet_taps(self) -> tuple:
+        """
+        Return (chip_index, taps) based on current true count.
 
-    def _target_bet_units(self) -> int:
-        """Return the number of bet units based on current true count."""
+        Chip indices map to CHIP_VALUES = [250, 500, 1000, 2500, 5000].
+        Bet sizing (1 unit = 1× base chip = 250):
+          TC ≤ 1  →  1 tap of 250   (bet 250)
+          TC ≤ 2  →  2 taps of 250  (bet 500)
+          TC ≤ 3  →  1 tap of 1000  (bet 1000)
+          TC ≤ 4  →  1 tap of 2500  (bet 2500)
+          TC ≥ 5  →  1 tap of 5000  (bet 5000)
+        """
         tc = self._counter.true_count()
-        if tc <= 1:   return 1
-        elif tc <= 2: return 2
-        elif tc <= 3: return 4
-        elif tc <= 4: return 8
-        else:          return 12
-
-    def _best_chip(self, gf: GameFrame, units: int) -> Optional[int]:
-        """Return the best chip denomination for the desired units."""
-        if not gf.chips:
-            return None
-        available = sorted(gf.chips.keys(), reverse=True)
-        chosen = available[-1]
-        for v in available:
-            if v <= units:
-                chosen = v
-                break
-        return chosen
+        if tc <= 1:   return (0, 1)   # 250 × 1
+        elif tc <= 2: return (0, 2)   # 250 × 2
+        elif tc <= 3: return (1, 1)   # 500 × 1  (≈ 2 units)
+        elif tc <= 4: return (2, 1)   # 1000 × 1 (≈ 4 units)
+        else:         return (3, 1)   # 2500 × 1 (≈ 10 units)
 
     def _place_bet(self, gf: GameFrame) -> None:
         """
         Place the optimal bet based on the current true count.
 
         Flow:
-          1. Determine target denomination from TC.
-          2. If the current bet uses a DIFFERENT denomination → tap Clear first.
-          3. Tap the chosen chip (1–3 times to approximate target units).
-          4. Tap Deal to start the hand.
+          1. Pick chip index + taps from TC.
+          2. Find that chip in gf.chips by denomination.
+          3. Tap chip N times, then tap Deal.
         """
-        if not self._adb:
+        if not self._adb or not gf.chips:
+            log.debug("_place_bet: no adb or no chips detected")
             return
 
-        units  = self._target_bet_units()
-        chosen = self._best_chip(gf, units)
-        if chosen is None:
-            log.debug("_place_bet: no chips detected")
-            return
+        chip_idx, taps = self._target_bet_taps()
+        from .game_detector import Layout
+        # Map chip index to denomination
+        target_denom = Layout.CHIP_VALUES[chip_idx] if chip_idx < len(Layout.CHIP_VALUES) else Layout.CHIP_VALUES[0]
 
+        # Find closest available chip denomination (in case some are missing)
+        available = sorted(gf.chips.keys())
+        chosen = min(available, key=lambda v: abs(v - target_denom))
         tc = self._counter.true_count()
-        taps = max(1, min(3, round(units / max(chosen, 1))))
-        log.info("Auto-bet: TC=%.1f → %d units → chip %d × %d taps", tc, units, chosen, taps)
-
-        # If we need a different denomination than last time, clear the current bet first
-        if self._last_bet_denomination != 0 and self._last_bet_denomination != chosen:
-            if gf.clear_btn:
-                log.info("Auto-bet: changing denomination %d→%d, tapping Clear at (%d,%d)",
-                         self._last_bet_denomination, chosen, *gf.clear_btn)
-                self._adb.tap(*gf.clear_btn)
-                time.sleep(0.5)
-            else:
-                log.debug("Auto-bet: denomination change needed but no Clear button found")
+        log.info("Auto-bet: TC=%.1f → chip %d × %d taps", tc, chosen, taps)
 
         x, y = gf.chips[chosen]
-        for _ in range(taps):
+        for i in range(taps):
             self._adb.tap(x, y)
-            time.sleep(0.35)
+            time.sleep(0.4)
 
         self._last_bet_denomination = chosen
         self._bet_placed            = True
         self._last_tap_time         = time.monotonic()
 
         # Short pause then tap Deal
-        time.sleep(0.5)
+        time.sleep(0.6)
         if gf.deal_btn:
             log.info("Auto-tap: Deal at (%d,%d)", *gf.deal_btn)
             self._adb.tap(*gf.deal_btn)

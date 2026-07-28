@@ -87,9 +87,8 @@ class Layout:
     # Chip zone: y = 75%–96% of screen height
     CHIP_ROW_Y_TOP    = 0.750
     CHIP_ROW_Y_BOTTOM = 0.962
-    # 5 chip positions (x fractions) — evenly spaced in the app
-    CHIP_X_FRACS = [0.10, 0.27, 0.45, 0.63, 0.82]
-    CHIP_VALUES  = [5, 25, 100, 500, 1000]
+    # Real chip denominations in Vegas Blackjack app (left to right)
+    CHIP_VALUES  = [250, 500, 1000, 2500, 5000]
 
     # Betting screen dark buttons ("Clear" / "Deal") — appear when a bet is placed
     # These buttons have very dark (near-black) backgrounds with white text.
@@ -596,10 +595,20 @@ class VegasBJDetector:
             log.debug("No chip blobs found")
             return {}
 
+        # Filter out oversized blobs (the selected/stacked chip in the center
+        # can be 10× bigger than individual chips — skip it).
+        # Individual chip blobs are typically area < 50000.
+        chip_blobs = [(cx_b, cy_b, area) for cx_b, cy_b, area in blobs if area < 50000]
+
+        if not chip_blobs:
+            # Fallback: all blobs are large (no chips on screen in normal position)
+            log.debug("No individual chip blobs found (all oversized)")
+            return {}
+
         # Sort left-to-right and assign denominations by position order
-        blobs.sort(key=lambda b: b[0])
+        chip_blobs.sort(key=lambda b: b[0])
         chips: dict[int, Tuple[int, int]] = {}
-        for i, (cx_b, cy_b, _) in enumerate(blobs[:5]):
+        for i, (cx_b, cy_b, _) in enumerate(chip_blobs[:5]):
             value = Layout.CHIP_VALUES[i] if i < len(Layout.CHIP_VALUES) else Layout.CHIP_VALUES[-1]
             chips[value] = (cx_b, cy_b)
             log.debug("Chip %d assigned at (%d,%d)", value, cx_b, cy_b)
