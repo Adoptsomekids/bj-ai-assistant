@@ -249,13 +249,24 @@ class BJEngine:
         # Build player_cards for the strategy engine from the bubble total.
         # All components must be valid rank strings so hand_total() works.
         #
-        # Soft totals  12-21 → ["A", str(total-11)]   e.g. soft 18 → ["A","7"]
-        # Hard totals 12-21  → ["10", str(total-10)]  e.g. hard 16 → ["10","6"]
-        # Hard totals  4-11  → ["2",  str(total-2)]   e.g. hard  6 → ["2","4"]
-        #   (total-2 gives 2-9, all valid; total-10 would give negatives for <12)
-        # Special: player_total==11 with no ranks is almost always a single Ace
-        #   at deal-start → treat as soft so strategy uses the soft table.
+        # Prefer rank OCR ranks IF their computed total matches the bubble total
+        # (OCR can detect only 1 of 2 cards → partial ranks give wrong total).
+        # If ranks are partial/wrong, fall back to synthetic two-card hand:
+        #   Soft totals  12-21 → ["A", str(total-11)]   e.g. soft 18 → ["A","7"]
+        #   Hard totals 12-21  → ["10", str(total-10)]  e.g. hard 16 → ["10","6"]
+        #   Hard totals  4-11  → ["2",  str(total-2)]   e.g. hard  6 → ["2","4"]
+        # Special: player_total==11 with no ranks → single Ace → treat as soft.
+        _ranks_ok = False
         if gf.player_card_ranks:
+            t_check, s_check = hand_total(gf.player_card_ranks)
+            _ranks_ok = (t_check == player_total and s_check == is_soft)
+            if not _ranks_ok:
+                log.debug(
+                    "Rank OCR total %d(%s) != bubble %d(%s) — ignoring partial ranks",
+                    t_check, "soft" if s_check else "hard",
+                    player_total, "soft" if is_soft else "hard"
+                )
+        if _ranks_ok:
             player_cards = gf.player_card_ranks
         elif is_soft and 12 <= player_total <= 21:
             player_cards = ["A", str(player_total - 11)]

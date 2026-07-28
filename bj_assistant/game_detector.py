@@ -161,12 +161,18 @@ class GameFrame:
           1. dealer_upcard_rank if OCR succeeded (e.g. "J", "A", "6")
           2. str(dealer_total) if bubble OCR gave us the total (e.g. "6", "10")
           3. None if neither is available
+
+        Mapping for dealer_total from bubble:
+          1  → "A"  (Ace always shows as 1 in the bubble when alone)
+          2–9 → str(t)
+          10–21 → "10" (strategy table uses "10" for 10/J/Q/K)
         """
         if self.dealer_upcard_rank is not None:
             return self.dealer_upcard_rank
         if self.dealer_total is not None:
-            # Clamp to strategy-table range: 2–10, A
             t = self.dealer_total
+            if t == 1:
+                return "A"   # Ace bubble shows as 1
             if t >= 10:
                 return "10"
             return str(t)
