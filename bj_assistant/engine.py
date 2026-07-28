@@ -70,12 +70,16 @@ class BJEngine:
         # Betting phase state
         self._bet_placed: bool = False
         self._bet_phase_entered: float = 0.0
-        # First-hand gate: user plays the first BETTING manually.
-        # If we start mid-playing-hand, we count that as hand #1 completing.
+        # hands_completed: counts how many full hands have been seen.
         self._hands_completed: int = 0
-        self._started_mid_hand: bool = False  # True if engine started during a hand
+        self._started_mid_hand: bool = False
+        self._result_handled: bool = False   # True while still in result screen
         # Last bet denomination placed (to detect when we need to change it)
         self._last_bet_denomination: int = 0
+        # Session stats
+        self._wins: int = 0
+        self._losses: int = 0
+        self._pushes: int = 0
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -137,21 +141,31 @@ class BJEngine:
 
         # ── Result phase: count hand + reset + auto-tap Deal ─────────
         if gf.game_state == "result":
-            # If we started mid-hand, count it now when we see the result
-            if self._started_mid_hand and not self._hand_counted:
-                self._hands_completed += 1
-                self._started_mid_hand = False
-                log.info("Started mid-hand — counting as hand #%d", self._hands_completed)
-            if self._hand_counted:
-                self._hands_completed   += 1
-                self._hand_counted       = False
-                self._last_player_total  = None
-                self._last_dealer_total  = None
-                self._bet_placed         = False
-                self._bet_phase_entered  = 0.0
-                log.info("Hand #%d completed", self._hands_completed)
-            # Auto-tap Deal only after first hand (user plays first hand manually)
-            if self._auto_tap and self._adb and self._hands_completed >= 1:
+            # Parse win/loss/push text and update stats (once per result screen)
+            if not self._result_handled:
+                outcome = self._parse_result_text(frame)
+                if outcome == "win":
+                    self._wins += 1
+                elif outcome == "loss":
+                    self._losses += 1
+                elif outcome == "push":
+                    self._pushes += 1
+
+            # Count this hand (whether we started mid-hand or played it fully)
+            if not self._result_handled:
+                self._hands_completed  += 1
+                self._hand_counted      = False
+                self._last_player_total = None
+                self._last_dealer_total = None
+                self._bet_placed        = False
+                self._bet_phase_entered = 0.0
+                self._started_mid_hand  = False
+                self._result_handled    = True
+                log.info("Hand #%d complete — W:%d L:%d P:%d",
+                         self._hands_completed, self._wins, self._losses, self._pushes)
+
+            # Auto-tap Deal to start next hand immediately
+            if self._auto_tap and self._adb:
                 if gf.deal_btn:
                     now = time.monotonic()
                     if now - self._last_tap_time > self._TAP_COOLDOWN:
@@ -162,6 +176,9 @@ class BJEngine:
 
         # ── Betting phase: select chip + Deal ────────────────────────
         if gf.game_state == "betting":
+            # Leaving result phase → clear result_handled so next result is counted
+            self._result_handled = False
+
             now = time.monotonic()
             if self._bet_phase_entered == 0.0:
                 self._bet_phase_entered = now
@@ -177,9 +194,12 @@ class BJEngine:
                     "running_count": rc,
                     "bet_units": bet,
                     "hands_completed": self._hands_completed,
+                    "wins": self._wins,
+                    "losses": self._losses,
+                    "pushes": self._pushes,
                 })
-            # Only auto-bet from second hand onwards
-            if self._auto_tap and self._adb and self._hands_completed >= 1 and not self._bet_placed:
+            # Auto-bet immediately (no first-hand gate)
+            if self._auto_tap and self._adb and not self._bet_placed:
                 if gf.chips:
                     self._place_bet(gf)
                 elif gf.deal_btn:
@@ -204,17 +224,13 @@ class BJEngine:
             return
 
         if not gf.is_actionable:
-            # If we see a playing state that isn't actionable yet (animation),
-            # mark that we started mid-hand so we know to take over after result
-            if gf.game_state == "playing" and self._hands_completed == 0 and not self._started_mid_hand:
-                self._started_mid_hand = True
-                log.info("Engine started mid-hand — will auto-play from next hand")
+            # Clear result_handled whenever we're in a non-result state
+            if gf.game_state == "playing":
+                self._result_handled = False
             return  # not enough info yet
 
-        # Mark mid-hand if this is the first actionable frame
-        if self._hands_completed == 0 and not self._started_mid_hand:
-            self._started_mid_hand = True
-            log.info("Engine started mid-hand (actionable) — will auto-play from next hand")
+        # Clear result_handled on first actionable playing frame
+        self._result_handled = False
 
         # Use rank OCR result if available; fall back to bubble total as upcard
         dealer_upcard = gf.effective_dealer_upcard
@@ -292,13 +308,16 @@ class BJEngine:
 
         decision = decide(state)
         # Store bubble totals for display — never the synthetic card components
-        decision["player_total"]   = player_total
-        decision["is_soft"]        = is_soft
-        decision["player_cards"]   = player_cards
-        decision["dealer_upcard"]  = dealer_upcard
-        # player_display: clean human-readable total shown in HUD
-        #   "18s" for soft 18, "16" for hard 16, "6" for hard 6
-        decision["player_display"] = f"{player_total}{'s' if is_soft else ''}"
+        decision["player_total"]      = player_total
+        decision["is_soft"]           = is_soft
+        decision["player_cards"]      = player_cards
+        decision["dealer_upcard"]     = dealer_upcard
+        decision["player_display"]    = f"{player_total}{'s' if is_soft else ''}"
+        # Session stats for HUD
+        decision["wins"]              = self._wins
+        decision["losses"]            = self._losses
+        decision["pushes"]            = self._pushes
+        decision["hands_completed"]   = self._hands_completed
         self._last_decision = decision
 
         log.info(
@@ -316,8 +335,34 @@ class BJEngine:
             self._execute_action(decision, gf)
 
     # ------------------------------------------------------------------
-    # Auto-tap (experimental)
+    # Session stats
     # ------------------------------------------------------------------
+
+    def _parse_result_text(self, frame) -> Optional[str]:
+        """
+        OCR the result banner and return 'win', 'loss', or 'push'.
+        Returns None if result cannot be determined.
+        """
+        import re as _re
+        h, w = frame.shape[:2]
+        rx = int(0.05 * w)
+        ry = int(0.10 * h)
+        rw = int(0.90 * w)
+        rh = int(0.18 * h)
+        roi = frame[ry:ry+rh, rx:rx+rw]
+        text = self._detector._ocr_text(roi).lower()
+        log.debug("Result text: %r", text)
+        WIN_WORDS  = ("player wins", "you win", "you won", "blackjack", "dealer busts",
+                      "dealer bust")
+        LOSS_WORDS = ("dealer wins", "you lose", "you lost", "bust", "you bust")
+        PUSH_WORDS = ("push", "tie", "it's a tie", "stand-off")
+        if any(w in text for w in WIN_WORDS):
+            return "win"
+        if any(w in text for w in LOSS_WORDS):
+            return "loss"
+        if any(w in text for w in PUSH_WORDS):
+            return "push"
+        return None
 
     # ------------------------------------------------------------------
     # Bet placement (betting phase)

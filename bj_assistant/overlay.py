@@ -89,16 +89,20 @@ class TerminalHUD:
                 bet    = data.get("bet_units", 1)
                 rc     = data.get("running_count", 0)
                 hands  = data.get("hands_completed", 0)
+                wins   = data.get("wins", 0)
+                losses = data.get("losses", 0)
+                pushes = data.get("pushes", 0)
                 tc_colour = "green" if tc > 1 else "red" if tc < -1 else "white"
-                if hands == 0:
-                    mode_line = "[yellow]⏳ Waiting for you to play first hand...[/yellow]"
-                else:
-                    mode_line = "[dim]🤖 Placing bet automatically...[/dim]"
+                stats_line = (
+                    f"[green]W:{wins}[/green]  [red]L:{losses}[/red]  "
+                    f"[dim]P:{pushes}[/dim]  [dim]Hands:{hands}[/dim]"
+                )
                 body = (
                     f"[dim]True Count:[/dim] [{tc_colour}]{tc:+.1f}[/{tc_colour}]  "
                     f"[dim]Running:[/dim] [{tc_colour}]{rc:+d}[/{tc_colour}]\n"
-                    f"[dim]Recommended Bet:[/dim] [yellow]{bet}×[/yellow] unit\n"
-                    f"{mode_line}"
+                    f"[dim]Bet:[/dim] [yellow]{bet}×[/yellow] unit\n"
+                    f"{stats_line}\n"
+                    f"[dim]🤖 Placing bet automatically...[/dim]"
                 )
                 return Panel(body, title="♠ BJ AI Assistant — 🎲 BETTING",
                              border_style="yellow")
@@ -112,6 +116,10 @@ class TerminalHUD:
             p_disp  = data.get("player_display") or str(data.get("player_total", "?"))
             d_up    = data.get("dealer_upcard", "?")
             reason  = data.get("reasoning", "")
+            wins    = data.get("wins", 0)
+            losses  = data.get("losses", 0)
+            pushes  = data.get("pushes", 0)
+            hands   = data.get("hands_completed", 0)
 
             tc_colour = "green" if tc > 1 else "red" if tc < -1 else "white"
 
@@ -122,11 +130,14 @@ class TerminalHUD:
                 f"[dim]│ Dealer:[/dim] [bold]{d_up}[/bold]"
             )
             tbl.add_row(
-                f"[dim]True Count:[/dim] [{tc_colour}]{tc:+.1f}[/{tc_colour}]  "
-                f"[dim]Running:[/dim] [{tc_colour}]{rc:+d}[/{tc_colour}]",
-                f"[dim]Bet:[/dim] [yellow]{bet}×[/yellow] unit"
+                f"[dim]TC:[/dim] [{tc_colour}]{tc:+.1f}[/{tc_colour}]  "
+                f"[dim]RC:[/dim] [{tc_colour}]{rc:+d}[/{tc_colour}]",
+                f"[dim]Bet:[/dim] [yellow]{bet}×[/yellow]"
             )
-            tbl.add_row(f"[dim]{reason}[/dim]", "")
+            tbl.add_row(
+                f"[green]W:{wins}[/green] [red]L:{losses}[/red] [dim]P:{pushes} #{hands}[/dim]",
+                f"[dim]{reason}[/dim]"
+            )
 
             return Panel(tbl, title="♠ BJ AI Assistant", border_style=colour.split()[-1])
 
