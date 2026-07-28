@@ -182,7 +182,11 @@ class BJEngine:
             now = time.monotonic()
             if self._bet_phase_entered == 0.0:
                 self._bet_phase_entered = now
-                self._bet_placed = False
+                # Only reset bet_placed if we don't already see a live bet.
+                # If Clear+Deal are visible a bet is already on the table —
+                # don't reset so we don't try to add more chips.
+                if not (gf.clear_btn and gf.deal_btn):
+                    self._bet_placed = False
 
             tc  = self._counter.true_count()
             rc  = self._counter.running_count

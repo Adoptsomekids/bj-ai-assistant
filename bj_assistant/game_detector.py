@@ -559,28 +559,31 @@ class VegasBJDetector:
         Read the player's chip balance from the top-left corner of the screen.
         Verified position on 1080×2340: x=0–35%, y=3–10% → reads e.g. '1,507'
         """
-        x1, y1 = 0,            int(0.030 * h)
-        x2, y2 = int(0.38 * w), int(0.105 * h)
+        x1, y1 = 0,             int(0.030 * h)
+        x2, y2 = int(0.35 * w), int(0.105 * h)
         roi = frame[y1:y2, x1:x2]
         if roi.size == 0:
             return None
         big = cv2.resize(roi, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
-        cfg = "--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789,."
+        cfg = "--oem 3 --psm 7 -c tessedit_char_whitelist=0123456789,"
         text = self._tess.image_to_string(big, config=cfg).strip() if self._tess else ""
-        # Find the largest number in the text (may read multiple numbers)
+        # Extract all comma-formatted numbers (e.g. "1,507")
+        # psm 7 = single line → usually gives cleaner output
         candidates = []
-        for tok in re.findall(r'[\d,]+', text):
+        for tok in re.findall(r'\d[\d,]*', text):
             try:
-                candidates.append(int(tok.replace(",", "")))
+                val = int(tok.replace(",", ""))
+                # Valid balance range: 250 (min bet) to 9,999,999
+                if 250 <= val <= 9_999_999:
+                    candidates.append(val)
             except ValueError:
                 pass
         if not candidates:
-            log.debug("_read_balance: no number found in %r", text)
+            log.debug("_read_balance: no valid number in %r", text)
             return None
-        val = max(candidates)
-        if val < 100 or val > 10_000_000:
-            log.debug("_read_balance: implausible value %d from %r", val, text)
-            return None
+        # Pick the smallest valid candidate — OCR garbage tends to be larger
+        # (e.g. reads "41,501" when actual is "1,501")
+        val = min(candidates)
         log.debug("_read_balance: %d (raw=%r)", val, text)
         return val
 
