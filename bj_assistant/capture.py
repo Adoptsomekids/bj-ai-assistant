@@ -6,19 +6,20 @@ Screen capture backends:
   - ScrcpyCapture: reads the scrcpy virtual display window (fastest, real-time)
   - MacOSCapture : captures the scrcpy window by window title using macOS screencapture
 
-Usage precedence: ScrcpyCapture → ADBCapture → MacOSCapture
+Usage precedence: ADBCapture only (phone over USB).
 """
 
 from __future__ import annotations
 import logging
+import os
 import subprocess
 import tempfile
-import time
 from abc import ABC, abstractmethod
-from io import BytesIO
 from pathlib import Path
 from typing import Optional
 
+# Suppress OpenCV camera-not-authorized spam on macOS before importing cv2
+os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
 import cv2
 import numpy as np
 
@@ -224,20 +225,27 @@ end tell
 
 def get_best_capture(device_serial: Optional[str] = None) -> ScreenCapture:
     """
-    Return the best available capture backend in priority order:
-    1. ADBCapture (direct, reliable, works over USB)
-    2. ScrcpyCapture (fastest if scrcpy is running)
-    3. MacOSWindowCapture (fallback)
+    Return the best available capture backend.
+    ADB (USB) is the only supported backend for this project.
+    Raises SystemExit with a clear message if the phone is not connected.
     """
     adb = ADBCapture(device_serial)
     if adb.is_available():
         log.info("Using ADB capture backend")
         return adb
 
-    scrcpy = ScrcpyCapture()
-    if scrcpy.is_available():
-        log.info("Using scrcpy/OpenCV capture backend")
-        return scrcpy
-
-    log.info("Using macOS screencapture fallback")
-    return MacOSWindowCapture()
+    # Phone not connected — give a clear actionable error instead of
+    # falling back to macOS screencapture (which captures the Mac screen,
+    # not the phone, and requires Screen Recording permission).
+    msg = (
+        "\n"
+        "❌  No Android device found via ADB.\n\n"
+        "   Fix:\n"
+        "     1. Connect your phone with a USB cable\n"
+        "     2. Enable USB Debugging:  Settings → Developer Options → USB Debugging\n"
+        "     3. Accept the 'Allow USB Debugging?' prompt on the phone\n"
+        "     4. Run:  adb devices   (should show RZCW82D69YH  device)\n"
+        "     5. Then re-run:  bj-assistant run\n"
+    )
+    print(msg)
+    raise SystemExit(1)
