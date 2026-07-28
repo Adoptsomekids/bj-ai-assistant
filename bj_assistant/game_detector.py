@@ -583,16 +583,21 @@ class VegasBJDetector:
         A coin/medal icon to the left causes OCR to prepend junk digits.
         Fix: scan only x=12%–32% to skip the icon.
         """
-        x1, y1 = int(0.17 * w), int(0.030 * h)
-        x2, y2 = int(0.32 * w), int(0.110 * h)
+        # Scan x=0.10–0.40 to capture the full balance number including leading digits.
+        # The coin icon at x<0.15 causes OCR to read a junk digit — we strip it by
+        # taking only the LAST continuous numeric token (the real number).
+        x1, y1 = int(0.10 * w), int(0.025 * h)
+        x2, y2 = int(0.42 * w), int(0.115 * h)
         roi = frame[y1:y2, x1:x2]
         if roi.size == 0:
             return None
         big = cv2.resize(roi, None, fx=5, fy=5, interpolation=cv2.INTER_CUBIC)
         cfg = "--oem 3 --psm 7 -c tessedit_char_whitelist=0123456789,"
         text = self._tess.image_to_string(big, config=cfg).strip() if self._tess else ""
+        # Extract all comma-formatted tokens
+        tokens = re.findall(r'\d[\d,]*', text)
         candidates = []
-        for tok in re.findall(r'\d[\d,]*', text):
+        for tok in tokens:
             try:
                 val = int(tok.replace(",", ""))
                 if 250 <= val <= 9_999_999:
@@ -602,9 +607,11 @@ class VegasBJDetector:
         if not candidates:
             log.debug("_read_balance: no valid number in %r", text)
             return None
-        # Prefer the first token — that's the actual balance number
-        val = candidates[0]
-        log.debug("_read_balance: %d (raw=%r)", val, text)
+        # The balance is the LARGEST valid candidate —
+        # OCR artifacts from the coin icon tend to produce smaller fragments
+        # (e.g. "1,501" when real is "41,501" or "4,501")
+        val = max(candidates)
+        log.debug("_read_balance: %d (raw=%r tokens=%s)", val, text, candidates)
         return val
 
     # ------------------------------------------------------------------

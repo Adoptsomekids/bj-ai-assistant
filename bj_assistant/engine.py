@@ -217,23 +217,25 @@ class BJEngine:
                     "losses": self._losses,
                     "pushes": self._pushes,
                 })
-            # Auto-bet immediately
-            if self._auto_tap and self._adb and not self._bet_placed:
-                if gf.bet_is_placed:
-                    # Bet already on table — just tap Deal
+            # Auto-bet logic:
+            #   Phase 1 — chip not yet tapped: tap the chip
+            #   Phase 2 — chip tapped, waiting for bet to register: tap Deal once confirmed
+            if self._auto_tap and self._adb:
+                if gf.bet_is_placed and gf.deal_btn:
+                    # Bet confirmed on table → tap Deal (only once per bet cycle)
                     now2 = time.monotonic()
                     if now2 - self._last_tap_time > self._TAP_COOLDOWN:
-                        log.info("Auto-bet: bet already placed → tapping Deal at (%d,%d)",
-                                 *gf.deal_btn)
+                        log.info("Auto-bet: bet confirmed → Deal at (%d,%d)", *gf.deal_btn)
                         self._adb.tap(*gf.deal_btn)
                         self._last_tap_time = now2
                         self._bet_placed = True
                         self._bet_phase_entered = 0.0
-                elif gf.chips:
-                    # No existing bet — place one now
+                elif not self._bet_placed and gf.chips:
+                    # No bet placed yet → tap chip
                     self._place_bet(gf)
                 else:
-                    log.debug("Auto-bet: waiting for chips or bet_is_placed (no tap)")
+                    log.debug("Auto-bet: waiting (bet_placed=%s, bet_confirmed=%s, chips=%s)",
+                              self._bet_placed, gf.bet_is_placed, list(gf.chips.keys()))
             return
 
         if not gf.is_actionable:
@@ -436,18 +438,16 @@ class BJEngine:
 
         x, y = gf.chips[chosen]
         self._adb.tap(x, y)
-        time.sleep(0.5)
 
         self._last_bet_denomination = chosen
         self._bet_placed            = True
         self._last_tap_time         = time.monotonic()
 
-        # Short pause then tap Deal
-        time.sleep(0.6)
-        if gf.deal_btn:
-            log.info("Auto-tap: Deal at (%d,%d)", *gf.deal_btn)
-            self._adb.tap(*gf.deal_btn)
-            self._last_tap_time = time.monotonic()
+        # Do NOT tap Deal here — the engine will tap Deal on the next tick
+        # once bet_is_placed=True is confirmed by strip OCR ('clear'/'deal' visible).
+        # Tapping Deal immediately risks tapping a chip/icon instead of the real
+        # Deal button (which only appears after the chip tap is registered).
+        log.info("Auto-bet: tapped chip %d at (%d,%d) — waiting for Deal button", chosen, x, y)
 
     # ------------------------------------------------------------------
     # Play action (playing phase)
