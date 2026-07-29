@@ -198,10 +198,7 @@ class BJEngine:
             now = time.monotonic()
             if self._bet_phase_entered == 0.0:
                 self._bet_phase_entered = now
-                # Only reset bet_placed if no bet is currently on the table.
-                # If OCR sees 'clear'+'deal' in strip, a bet is already placed.
-                if not gf.bet_is_placed:
-                    self._bet_placed = False
+                self._bet_placed = False   # fresh betting phase — reset
 
             tc  = self._counter.true_count()
             rc  = self._counter.running_count
@@ -226,13 +223,14 @@ class BJEngine:
             return
 
         if not gf.is_actionable:
-            # Clear result_handled whenever we're in a non-result state
             if gf.game_state == "playing":
                 self._result_handled = False
-            return  # not enough info yet
+                self._bet_phase_entered = 0.0  # reset so next bet phase starts fresh
+            return
 
-        # Clear result_handled on first actionable playing frame
-        self._result_handled = False
+        # Actionable playing frame
+        self._result_handled   = False
+        self._bet_phase_entered = 0.0  # reset so next bet phase starts fresh
 
         # Use rank OCR result if available; fall back to bubble total as upcard
         dealer_upcard = gf.effective_dealer_upcard
@@ -440,7 +438,8 @@ class BJEngine:
         self._last_bet_denomination = chosen
         self._bet_placed            = True
         self._last_tap_time         = time.monotonic()
-        self._bet_phase_entered     = 0.0
+        # Do NOT reset _bet_phase_entered here — that would cause the
+        # betting phase entry block to re-run and reset _bet_placed=False
 
     # ------------------------------------------------------------------
     # Play action (playing phase)
