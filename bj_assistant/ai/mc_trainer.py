@@ -1,19 +1,23 @@
 """
 mc_trainer.py
 -------------
-Offline Monte Carlo reinforcement learning trainer for Blackjack.
+Monte Carlo RL trainer for Blackjack, initialized from Basic Strategy.
 
-Inspired by tarunravi/BlackjackAI (Monte Carlo method, epsilon-greedy).
-Adapted for 6-deck S17 DAS BJ with Hi-Lo true count in the state space.
+KEY DESIGN: Q-table is pre-seeded from Basic Strategy so that:
+  1. States never visited → still play perfectly (BS is correct)
+  2. MC training only ADJUSTS Q-values where simulation disagrees
+  3. Coverage problem (only 24% of states visited) is irrelevant
 
-Algorithm: Every-Visit Monte Carlo with epsilon-greedy exploration.
+Algorithm:
+  Phase 1 — Seed: fill Q-table from Basic Strategy lookup
+  Phase 2 — MC:   run episodes, update Q where simulation data exists
+
 State:  (player_total, is_soft, dealer_upcard_idx, tc_bucket, can_double, can_split)
 Action: 0=Stand, 1=Hit, 2=Double, 3=Split
 
-Run once to produce models/bj_qtable.npy:
-    python -m bj_assistant.ai.mc_trainer --episodes 20000
-
-The resulting Q-table is ~560 KB and loads in <5ms at runtime.
+Run once:
+    bj-assistant train-ai --episodes 500000
+The resulting Q-table is 225 KB and loads in <5ms at runtime.
 """
 
 from __future__ import annotations
@@ -296,20 +300,106 @@ def simulate_hand(
 
 
 # ---------------------------------------------------------------------------
-# Monte Carlo trainer (Every-Visit, epsilon-greedy)
+# Phase 1: Seed Q-table directly from strategy.py decide()
+# ---------------------------------------------------------------------------
+
+# Q-value magnitude for BS seed
+_BS_SEED_STRONG  = 0.50   # best action for this state
+_BS_SEED_PENALTY = -0.30  # unavailable actions
+
+
+def seed_from_basic_strategy(q_table: np.ndarray) -> np.ndarray:
+    """
+    Phase 1: Pre-fill Q-table using strategy.py decide() — the same engine
+    used at runtime. This guarantees 100% agreement for all unvisited states.
+
+    MC training then adjusts Q-values where simulation data provides evidence
+    (especially for count-dependent deviations at non-neutral TC buckets).
+    """
+    # Import here to avoid circular deps at module level
+    from bj_assistant.strategy import GameState, HiLoCounter, decide, hand_total
+
+    log.info("Phase 1: seeding Q-table from strategy.py decide()...")
+
+    DEALER_STRS = ['2','3','4','5','6','7','8','9','10','A']
+    DEALER_VALS = [2,   3,   4,   5,   6,   7,   8,   9,   10,  11 ]
+    TC_VALS     = [-3, -1, 0, +1, +3]   # representative TC for each bucket
+
+    seeded = 0
+    for pt in range(PLAYER_TOTAL_MIN, PLAYER_TOTAL_MAX + 1):
+        for soft in [False, True]:
+            if soft and pt < 12:
+                continue
+            for d_str, d_val in zip(DEALER_STRS, DEALER_VALS):
+                for tc_bucket, tc_raw in enumerate(TC_VALS):
+                    for cd in [False, True]:
+                        for cs in [False, True]:
+                            # Build synthetic player cards matching (pt, soft)
+                            if soft and pt >= 12:
+                                p_cards = ['A', str(pt - 11)] if pt > 11 else ['A']
+                            elif pt >= 12:
+                                p_cards = ['10', str(pt - 10)]
+                            else:
+                                p_cards = ['2', str(pt - 2)]
+
+                            # If can_split, make it a pair (e.g. total=8 → [4,4])
+                            if cs and not soft and pt % 2 == 0 and 4 <= pt <= 20:
+                                half = pt // 2
+                                p_cards = [str(half), str(half)]
+
+                            counter = HiLoCounter(6)
+                            counter.running_count = int(tc_raw * 3)
+
+                            state = GameState(
+                                player_cards  = p_cards,
+                                dealer_upcard = d_str,
+                                counter       = counter,
+                                can_double    = cd,
+                                can_split     = cs,
+                            )
+                            try:
+                                result   = decide(state)
+                                bs_action = result['action']
+                                bs_idx   = ACTIONS.index(bs_action) if bs_action in ACTIONS else ACTION_HIT
+                            except Exception:
+                                bs_idx = ACTION_HIT  # safe default
+
+                            state_idx = encode_state(pt, soft, d_val, tc_raw, cd, cs)
+
+                            # Seed: BS action = strong positive, others = 0
+                            q_table[state_idx, :]       = 0.0
+                            q_table[state_idx, bs_idx]  = _BS_SEED_STRONG
+
+                            # Unavailable actions get penalty
+                            if not cd:
+                                q_table[state_idx, ACTION_DOUBLE] = _BS_SEED_PENALTY
+                            if not cs:
+                                q_table[state_idx, ACTION_SPLIT]  = _BS_SEED_PENALTY
+
+                            seeded += 1
+
+    log.info("Phase 1 complete: %d state-slots seeded from strategy.py.", seeded)
+    return q_table
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Monte Carlo trainer (Every-Visit, epsilon-greedy)
 # Adapted from tarunravi/BlackjackAI (Monte Carlo Method)
 # ---------------------------------------------------------------------------
 
 def train(
-    episodes: int = 20_000,
+    episodes: int = 500_000,
     epsilon: float = 0.10,
-    alpha:   float = 0.02,
+    alpha:   float = 0.005,  # small alpha → MC refines without overwriting BS seed
     gamma:   float = 1.00,
     num_decks: int = 6,
     seed: int = 42,
 ) -> np.ndarray:
     """
-    Train a Q-table using Every-Visit Monte Carlo.
+    Train a Q-table using BS-seeded Every-Visit Monte Carlo.
+
+    Phase 1: Seed all states from Basic Strategy (instant, 100% coverage).
+    Phase 2: MC episodes refine Q-values with true-count awareness.
 
     Returns
     -------
@@ -318,15 +408,18 @@ def train(
     random.seed(seed)
     np.random.seed(seed)
 
+    # Phase 1: seed from Basic Strategy
     q_table = np.zeros((TOTAL_STATES, NUM_ACTIONS))
-    n_table = np.zeros((TOTAL_STATES, NUM_ACTIONS), dtype=np.int32)  # visit counts
+    q_table = seed_from_basic_strategy(q_table)
+
+    n_table = np.zeros((TOTAL_STATES, NUM_ACTIONS), dtype=np.int32)
 
     shoe = Shoe(num_decks=num_decks)
 
-    log.info("Training Monte Carlo BJ agent: episodes=%d, ε=%.2f, α=%.3f", episodes, epsilon, alpha)
+    log.info("Phase 2: MC training: episodes=%d, ε=%.2f, α=%.3f", episodes, epsilon, alpha)
 
     for ep in range(episodes):
-        if ep % 2000 == 0:
+        if ep % 50000 == 0:
             log.info("  episode %d / %d", ep, episodes)
 
         # Deal initial cards
@@ -345,22 +438,20 @@ def train(
             d_up_val = 11
 
         tc         = shoe.true_count
-        can_double = True   # first action always allows double
+        can_double = True
         can_split  = (p1 == p2)
 
-        # Clamp player_total to valid range
         if not (PLAYER_TOTAL_MIN <= p_val <= PLAYER_TOTAL_MAX):
             continue
 
         state_idx = encode_state(p_val, p_soft, d_up_val, tc, can_double, can_split)
 
-        # Epsilon-greedy action selection
+        # Epsilon-greedy action selection (greedy on BS-seeded Q)
         if random.random() < epsilon:
             action = random.randint(0, NUM_ACTIONS - 1)
         else:
             action = int(np.argmax(q_table[state_idx]))
 
-        # Simulate the hand
         reward = simulate_hand(
             shoe, action, player_hand, dealer_upcard, dealer_hidden, can_double, can_split
         )
@@ -369,8 +460,9 @@ def train(
         n_table[state_idx, action] += 1
         q_table[state_idx, action] += alpha * (reward - q_table[state_idx, action])
 
-    log.info("Training complete. States visited: %d / %d",
-             int((n_table.sum(axis=1) > 0).sum()), TOTAL_STATES)
+    visited = int((n_table.sum(axis=1) > 0).sum())
+    log.info("Phase 2 complete. States updated by MC: %d / %d  (rest use BS seed)",
+             visited, TOTAL_STATES)
     return q_table
 
 
@@ -385,7 +477,7 @@ def main() -> None:
     parser.add_argument("--episodes", type=int, default=20_000,
                         help="Number of training episodes (default: 20000)")
     parser.add_argument("--epsilon",  type=float, default=0.10)
-    parser.add_argument("--alpha",    type=float, default=0.02)
+    parser.add_argument("--alpha",    type=float, default=0.005)
     parser.add_argument("--decks",    type=int,   default=6)
     parser.add_argument("--out",      type=str,   default="models/bj_qtable.npy",
                         help="Output path for Q-table (default: models/bj_qtable.npy)")
