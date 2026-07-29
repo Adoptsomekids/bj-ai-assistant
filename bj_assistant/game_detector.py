@@ -656,39 +656,40 @@ class VegasBJDetector:
         strip = frame[y1:y2, 0:w]
         hsv   = cv2.cvtColor(strip, cv2.COLOR_BGR2HSV)
 
-        # Broad gold/amber range — covers all chip denominations
-        gold_lo = np.array([10, 60, 60])
-        gold_hi = np.array([45, 255, 255])
-        gold_mask = cv2.inRange(hsv, gold_lo, gold_hi)
+        # Detect chip blobs by saturation — chips are distinctly colorful
+        # (S > 80, V > 60) regardless of hue (covers red/orange/green/purple chips).
+        # This replaces the old "gold only" range which missed non-yellow chips.
+        s_chan = hsv[:, :, 1]
+        v_chan = hsv[:, :, 2]
+        chip_mask = ((s_chan > 80) & (v_chan > 60)).astype(np.uint8) * 255
 
-        # Close to merge nearby pixels into chip blobs
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
-        gold_mask = cv2.morphologyEx(gold_mask, cv2.MORPH_CLOSE, kernel)
+        # Small close to fill intra-chip gaps without merging adjacent chips
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        chip_mask = cv2.morphologyEx(chip_mask, cv2.MORPH_CLOSE, kernel)
 
-        total_px = int(np.count_nonzero(gold_mask))
-        log.debug("Chip detection: total gold px=%d in strip y=%d-%d", total_px, y1, y2)
+        total_px = int(np.count_nonzero(chip_mask))
+        log.debug("Chip detection: total chip px=%d in strip y=%d-%d", total_px, y1, y2)
 
-        contours, _ = cv2.findContours(gold_mask, cv2.RETR_EXTERNAL,
+        contours, _ = cv2.findContours(chip_mask, cv2.RETR_EXTERNAL,
                                        cv2.CHAIN_APPROX_SIMPLE)
         blobs = []
         for cnt in contours:
             bx, by, bw, bh = cv2.boundingRect(cnt)
             area = cv2.contourArea(cnt)
-            if area < 1500:
+            if area < 5000:   # ignore noise (real chips are ~15k)
                 continue
             cx_b = bx + bw // 2
             cy_b = y1 + by + bh // 2
             blobs.append((cx_b, cy_b, area))
-            log.debug("  Gold blob at (%d,%d) area=%.0f", cx_b, cy_b, area)
+            log.debug("  Chip blob at (%d,%d) area=%.0f", cx_b, cy_b, area)
 
         if not blobs:
             log.debug("No chip blobs found")
             return {}
 
-        # Filter out oversized blobs (the selected/stacked chip in the center
-        # can be 10× bigger than individual chips — skip it).
-        # Individual chip blobs are typically area < 50000.
-        chip_blobs = [(cx_b, cy_b, area) for cx_b, cy_b, area in blobs if area < 50000]
+        # Filter out oversized blobs (the selected/stacked chip pile).
+        # Individual chips: ~8k–30k px.  Stacked pile: >60k px.
+        chip_blobs = [(cx_b, cy_b, area) for cx_b, cy_b, area in blobs if area < 60000]
 
         if not chip_blobs:
             # Fallback: all blobs are large (no chips on screen in normal position)
