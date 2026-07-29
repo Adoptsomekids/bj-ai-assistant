@@ -85,14 +85,17 @@ class TerminalHUD:
 
             # ── Betting phase special display ─────────────────────────
             if data.get("phase") == "betting":
-                tc     = data.get("true_count", 0.0)
-                bet    = data.get("bet_units", 1)
-                rc     = data.get("running_count", 0)
-                hands  = data.get("hands_completed", 0)
-                wins   = data.get("wins", 0)
-                losses = data.get("losses", 0)
-                pushes = data.get("pushes", 0)
+                tc        = data.get("true_count", 0.0)
+                bet       = data.get("bet_units", 1)
+                bet_lbl   = data.get("bet_label", f"{bet}× unit")
+                rc        = data.get("running_count", 0)
+                hands     = data.get("hands_completed", 0)
+                wins      = data.get("wins", 0)
+                losses    = data.get("losses", 0)
+                pushes    = data.get("pushes", 0)
+                ai_active = data.get("ai_active", False)
                 tc_colour = "green" if tc > 1 else "red" if tc < -1 else "white"
+                ai_badge  = "[green]🤖 AI+Kelly ON[/green]" if ai_active else "[dim]📊 Kelly ON  (train AI: mc_trainer)[/dim]"
                 stats_line = (
                     f"[green]W:{wins}[/green]  [red]L:{losses}[/red]  "
                     f"[dim]P:{pushes}[/dim]  [dim]Hands:{hands}[/dim]"
@@ -100,9 +103,9 @@ class TerminalHUD:
                 body = (
                     f"[dim]True Count:[/dim] [{tc_colour}]{tc:+.1f}[/{tc_colour}]  "
                     f"[dim]Running:[/dim] [{tc_colour}]{rc:+d}[/{tc_colour}]\n"
-                    f"[dim]Bet:[/dim] [yellow]{bet}×[/yellow] unit\n"
+                    f"[dim]Bet:[/dim] [yellow]{bet_lbl}[/yellow]\n"
                     f"{stats_line}\n"
-                    f"[dim]🤖 Placing bet automatically...[/dim]"
+                    f"{ai_badge}"
                 )
                 return Panel(body, title="♠ BJ AI Assistant — 🎲 BETTING",
                              border_style="yellow")
@@ -129,10 +132,13 @@ class TerminalHUD:
                 f"[dim]You:[/dim] [bold]{p_disp}[/bold]  "
                 f"[dim]│ Dealer:[/dim] [bold]{d_up}[/bold]"
             )
+            ai_active = data.get("ai_active", False)
+            ai_tag    = "[green]AI[/green]" if ai_active else "[dim]BS[/dim]"
+
             tbl.add_row(
                 f"[dim]TC:[/dim] [{tc_colour}]{tc:+.1f}[/{tc_colour}]  "
                 f"[dim]RC:[/dim] [{tc_colour}]{rc:+d}[/{tc_colour}]",
-                f"[dim]Bet:[/dim] [yellow]{bet}×[/yellow]"
+                f"[dim]Bet:[/dim] [yellow]{bet}×[/yellow]  {ai_tag}"
             )
             tbl.add_row(
                 f"[green]W:{wins}[/green] [red]L:{losses}[/red] [dim]P:{pushes} #{hands}[/dim]",

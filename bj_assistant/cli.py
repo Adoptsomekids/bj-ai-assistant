@@ -373,6 +373,47 @@ def calibrate(serial: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# train-ai — offline Q-table training
+# ---------------------------------------------------------------------------
+
+@cli.command("train-ai")
+@click.option("--episodes", default=100_000, type=int, show_default=True,
+              help="Number of MC training episodes")
+@click.option("--decks", default=6, type=int, show_default=True)
+@click.option("--out", default="models/bj_qtable.npy", show_default=True,
+              help="Output path for Q-table")
+def train_ai(episodes: int, decks: int, out: str) -> None:
+    """
+    Train the Monte Carlo Q-table offline.
+
+    Runs a BJ simulator for N episodes and saves the learned Q-table to disk.
+    The Q-table is then loaded automatically at runtime by the AI advisor.
+
+    Recommended: 500,000+ episodes for convergence (~2 min on M-series Mac).
+    """
+    from pathlib import Path
+    from .ai.mc_trainer import train
+
+    console.print(Panel(
+        f"Training Monte Carlo BJ agent\n"
+        f"Episodes: [bold]{episodes:,}[/bold]  |  Decks: {decks}  |  Out: {out}\n"
+        f"[dim]~{episodes // 50000} min on Apple Silicon[/dim]",
+        title="♠ BJ AI — Training", border_style="blue"
+    ))
+
+    q_table = train(episodes=episodes, num_decks=decks)
+
+    out_path = Path(out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    import numpy as np
+    np.save(str(out_path), q_table)
+
+    size_kb = out_path.stat().st_size / 1024
+    console.print(f"\n[green]✅ Q-table saved → {out_path}  ({size_kb:.1f} KB)[/green]")
+    console.print("[dim]Run  bj-assistant run  to use the trained model.[/dim]")
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 

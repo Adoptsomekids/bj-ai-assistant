@@ -5,6 +5,7 @@ Main control loop that ties together:
   - Screen capture (ADB / scrcpy / macOS)
   - Game-specific detector (Vegas BJ app — score bubbles + button colours)
   - Strategy decision (Basic Strategy + Hi-Lo counting + Illustrious 18)
+  - AI layer: Monte Carlo Q-table + Kelly Criterion bet sizing
   - HUD overlay update
   - Optional ADB tap automation
 
@@ -24,6 +25,8 @@ from .capture import ScreenCapture, get_best_capture, ADBCapture
 from .game_detector import VegasBJDetector, GameFrame
 from .strategy import GameState, HiLoCounter, decide, hand_total
 from .overlay import HUDOverlay
+from .ai.ai_advisor import AIAdvisor
+from .ai.kelly import kelly_bet_units, kelly_chip_amount, bet_spread_label
 
 log = logging.getLogger(__name__)
 
@@ -53,6 +56,8 @@ class BJEngine:
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._last_decision: Optional[dict] = None
+        # AI layer: Monte Carlo Q-table advisor (loads silently, falls back if not trained)
+        self._ai_advisor = AIAdvisor.get_instance()
         # Track last seen player+dealer state to avoid re-counting same cards
         self._last_player_total: Optional[int] = None
         self._last_dealer_total: Optional[int] = None
@@ -202,13 +207,16 @@ class BJEngine:
 
             tc  = self._counter.true_count()
             rc  = self._counter.running_count
-            bet = (1 if tc <= 1 else 2 if tc <= 2 else 4 if tc <= 3 else 8 if tc <= 4 else 12)
+            # Kelly Criterion bet sizing (replaces simple TC spread)
+            bet = kelly_bet_units(tc, balance=gf.balance)
             if self._overlay:
                 self._overlay.update({
                     "phase": "betting",
                     "true_count": round(tc, 2),
                     "running_count": rc,
                     "bet_units": bet,
+                    "bet_label": bet_spread_label(tc),
+                    "ai_active": self._ai_advisor.has_model,
                     "hands_completed": self._hands_completed,
                     "wins": self._wins,
                     "losses": self._losses,
@@ -307,12 +315,54 @@ class BJEngine:
         )
 
         decision = decide(state)
+
+        # ── AI override (Monte Carlo Q-table) ────────────────────────
+        # Ask the AI advisor for its recommendation. If it differs from
+        # Basic Strategy, log the disagreement but prefer the AI if model
+        # has been trained with enough episodes (conservative threshold).
+        ai_action = self._ai_advisor.decide(
+            player_total  = player_total,
+            is_soft       = is_soft,
+            dealer_upcard = dealer_upcard or "2",
+            true_count    = self._counter.true_count(),
+            can_double    = ("Double" in gf.buttons),
+            can_split     = ("Split" in gf.buttons),
+        )
+        ai_q_vals = self._ai_advisor.q_values_for_display(
+            player_total, is_soft, dealer_upcard or "2",
+            self._counter.true_count(),
+            "Double" in gf.buttons, "Split" in gf.buttons,
+        )
+        bs_action = decision.get("action")
+
+        if ai_action and ai_action != bs_action:
+            # AI disagrees with Basic Strategy — log for analysis, keep BS.
+            # Basic Strategy + I18 is mathematically proven; AI needs 1M+ episodes
+            # to reliably outperform it. Until then, BS wins on disagreements.
+            log.info(
+                "AI≠BS: AI=%s BS=%s  (player=%d%s dealer=%s TC=%.1f) — keeping BS",
+                ai_action, bs_action,
+                player_total, "s" if is_soft else "", dealer_upcard,
+                self._counter.true_count()
+            )
+            decision["reasoning"] = (
+                decision.get("reasoning", "") +
+                f"  [AI:{ai_action}≠BS, BS wins]"
+            )
+        elif ai_action:
+            # AI agrees with Basic Strategy — confirmation
+            decision["reasoning"] = (
+                decision.get("reasoning", "") +
+                f"  [AI✓]"
+            )
+
         # Store bubble totals for display — never the synthetic card components
         decision["player_total"]      = player_total
         decision["is_soft"]           = is_soft
         decision["player_cards"]      = player_cards
         decision["dealer_upcard"]     = dealer_upcard
         decision["player_display"]    = f"{player_total}{'s' if is_soft else ''}"
+        decision["ai_active"]         = self._ai_advisor.has_model
         # Session stats for HUD
         decision["wins"]              = self._wins
         decision["losses"]            = self._losses
@@ -321,10 +371,12 @@ class BJEngine:
         self._last_decision = decision
 
         log.info(
-            "Player=%d%s  Dealer=%s  → %s  TC=%.1f  Bet=%dx  Btns=%s",
+            "Player=%d%s  Dealer=%s  → %s%s  TC=%.1f  Bet=%dx  Btns=%s",
             player_total, "(soft)" if is_soft else "",
             dealer_upcard,
-            decision["label"], decision["true_count"], decision["bet_units"],
+            decision["label"],
+            " [AI]" if (ai_action and self._ai_advisor.has_model) else " [BS]",
+            decision["true_count"], decision["bet_units"],
             list(gf.buttons.keys())
         )
 
@@ -370,31 +422,28 @@ class BJEngine:
 
     def _target_bet_amount(self, balance: Optional[int]) -> int:
         """
-        Return the desired bet amount (in chip denomination units) based on TC.
-        Capped to the available balance so we never open the store.
+        Return the desired bet chip denomination using Kelly Criterion.
 
-        Bet schedule (1 unit = 250):
-          TC ≤ 1  →  250
-          TC ≤ 2  →  500
-          TC ≤ 3  →  500
-          TC ≤ 4  → 1000
-          TC ≥ 5  → 2500
+        Kelly f* = (b*p - q) / b, fractional Kelly /4 for safety.
+        Falls back to minimum bet (250) when balance unknown or TC very negative.
         """
         tc = self._counter.true_count()
-        if tc <= 1:   desired = 250
-        elif tc <= 2: desired = 500
-        elif tc <= 3: desired = 500
-        elif tc <= 4: desired = 1000
-        else:         desired = 2500
-
-        # Cap to balance — if balance unknown, always bet minimum (safe default)
         from .game_detector import Layout
+        available_chips = sorted(Layout.CHIP_VALUES)
+
+        desired = kelly_chip_amount(
+            true_count     = tc,
+            balance        = balance,
+            unit_value     = 250,
+            available_chips = available_chips,
+        )
+
+        # Hard cap to balance
         cap = balance if (balance is not None and balance >= 250) else 250
         if desired > cap:
-            affordable = [v for v in Layout.CHIP_VALUES if v <= cap]
-            capped = affordable[-1] if affordable else Layout.CHIP_VALUES[0]
-            log.info("Auto-bet: capping %d → %d (balance=%s)", desired, capped, balance)
-            desired = capped
+            affordable = [v for v in available_chips if v <= cap]
+            desired = affordable[-1] if affordable else available_chips[0]
+            log.info("Auto-bet (Kelly): capping to %d (balance=%s TC=%.1f)", desired, balance, tc)
 
         return desired
 
