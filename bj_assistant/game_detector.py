@@ -323,31 +323,29 @@ class VegasBJDetector:
     def _detect_game_state(self, frame: np.ndarray, w: int, h: int) -> str:
         """
         Determine game phase by checking which UI elements are visible.
-        - 'betting'  — chip row visible, no cards → "Place Your Bet" or bet amount shown
         - 'playing'  — cards visible, action buttons present
         - 'result'   — "Dealer Wins" / "Player Wins" / "Push" overlay
+        - 'betting'  — chip row visible, no action buttons
 
-        Detection order:
-        1. Result overlay text (OCR middle band)
-        2. Action button COLOURS in the button strip (fast, no OCR — Stand=red,
-           Hit=green, Double=blue, Split=orange).  This fires even when OCR
-           can't read the button labels.
-        3. Action button TEXT via OCR (fallback)
+        Detection order (fastest / most reliable first):
+        1. Bright-green Hit button colour → playing  (zero OCR, instant, definitive)
+           This MUST run first: the betting screen also shows "clear"/"deal" text
+           in the same strip region, which previously caused a false "betting" result
+           even when cards were on screen and hit_bright_green_px=12795.
+        2. Result overlay OCR
+        3. "clear"/"deal" OCR → betting  (only reached if colour check says not playing)
+        4. Action word OCR → playing fallback
         """
-        # ── 1. Button strip OCR — checked FIRST to catch "clear"/"deal" ──
-        # The "clear/deal" betting screen keeps the Hit button visible (green),
-        # which would otherwise be misclassified as "playing". OCR is the only
-        # reliable way to distinguish this screen.
-        btn_strip = self._get_button_strip(frame, w, h)
-        btn_text  = self._ocr_text(btn_strip).lower()
-        log.debug("Button strip OCR: %r", btn_text)
+        # ── 1. Button colour check — MUST be first ───────────────────────
+        # hit_bright_green_px ≥ 3000 means the Hit button (bright lime green) is
+        # visible, which only happens during the playing phase. The betting screen
+        # has no bright-green buttons — the "500" chip is teal/muted (outside range).
+        # Previously this check ran AFTER OCR, causing "betting" false positives
+        # when OCR read "clear"/"deal" from the same strip during active play.
+        if self._colour_buttons_visible(frame, w, h):
+            return "playing"
 
-        # "clear" or "deal" in strip = betting screen with a placed bet
-        BETTING_WORDS = ("clear", "deal")
-        if any(word in btn_text for word in BETTING_WORDS):
-            return "betting"
-
-        # ── 2. Result overlay ────────────────────────────────────────────
+        # ── 2. Result overlay OCR ────────────────────────────────────────
         rx = int(Layout.RESULT_REGION_X * w)
         ry = int(Layout.RESULT_REGION_Y * h)
         rw = int(Layout.RESULT_REGION_W * w)
@@ -359,11 +357,16 @@ class VegasBJDetector:
         if any(kw in result_text for kw in RESULT_KEYWORDS):
             return "result"
 
-        # ── 3. Button colour detection (playing indicator) ───────────────
-        if self._colour_buttons_visible(frame, w, h):
-            return "playing"
+        # ── 3. Button strip OCR — only reached when colour says NOT playing ──
+        btn_strip = self._get_button_strip(frame, w, h)
+        btn_text  = self._ocr_text(btn_strip).lower()
+        log.debug("Button strip OCR: %r", btn_text)
 
-        # ── 4. Button text OCR fallback ──────────────────────────────────
+        BETTING_WORDS = ("clear", "deal")
+        if any(word in btn_text for word in BETTING_WORDS):
+            return "betting"
+
+        # ── 4. Action word OCR fallback ──────────────────────────────────
         ACTION_WORDS = ("stand", "hit", "double", "split", "surrender")
         if any(word in btn_text for word in ACTION_WORDS):
             return "playing"
