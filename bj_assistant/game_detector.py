@@ -95,9 +95,9 @@ class Layout:
     #   Deal:  x=50–100%, y=78–83% → centre ≈ (810, 1880) on 1080×2340
     DARK_BTN_Y_TOP    = 0.770
     DARK_BTN_Y_BOTTOM = 0.840
-    DARK_BTN_CLEAR_X  = 0.25   # centre x of Clear button
-    DARK_BTN_DEAL_X   = 0.75   # centre x of Deal button
-    DARK_BTN_CY_FRAC  = 0.805  # centre y of both buttons
+    DARK_BTN_CLEAR_X  = 0.381  # centre x of Clear button (verified: x=412/1080)
+    DARK_BTN_DEAL_X   = 0.620  # centre x of Deal button  (verified: x=670/1080)
+    DARK_BTN_CY_FRAC  = 0.817  # centre y of both buttons (verified: y=1913/2340)
 
     # Game state detection — result overlay text region
     # IMPORTANT: must NOT overlap the permanent felt text:
@@ -656,12 +656,13 @@ class VegasBJDetector:
         strip = frame[y1:y2, 0:w]
         hsv   = cv2.cvtColor(strip, cv2.COLOR_BGR2HSV)
 
-        # Detect chip blobs by saturation — chips are distinctly colorful
-        # (S > 80, V > 60) regardless of hue (covers red/orange/green/purple chips).
-        # This replaces the old "gold only" range which missed non-yellow chips.
+        # Detect chip blobs by saturation+brightness — chips are distinctly colorful
+        # (S > 80, V > 100) regardless of hue (covers red/orange/green/purple chips).
+        # V > 100 filters out dark near-black noise blobs (HSV V~67) while
+        # keeping all real chips (V=100–240).
         s_chan = hsv[:, :, 1]
         v_chan = hsv[:, :, 2]
-        chip_mask = ((s_chan > 80) & (v_chan > 60)).astype(np.uint8) * 255
+        chip_mask = ((s_chan > 80) & (v_chan > 100)).astype(np.uint8) * 255
 
         # Small close to fill intra-chip gaps without merging adjacent chips
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
