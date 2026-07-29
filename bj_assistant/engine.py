@@ -452,43 +452,54 @@ class BJEngine:
         Place the optimal bet based on TC, capped to available balance.
 
         Flow:
-          1. Compute desired bet amount (capped by balance).
-          2. Find closest chip denomination in gf.chips.
-          3. Tap chip once, then tap Deal.
+          1. Clear any existing bet (prevents double-bet from previous session).
+          2. Tap the chosen chip.
+          3. Wait 1.5 s for chip-animation to settle.
+          4. Tap Deal — twice with a short gap (app sometimes needs two taps).
         """
         if not self._adb or not gf.chips:
             log.debug("_place_bet: no adb or no chips detected")
             return
 
-        desired = self._target_bet_amount(gf.balance)
+        from .game_detector import Layout
+
+        desired   = self._target_bet_amount(gf.balance)
         available = sorted(gf.chips.keys())
 
         # Pick the chip closest to (but not exceeding) desired
         affordable = [v for v in available if v <= desired]
-        chosen = affordable[-1] if affordable else available[0]
-        tc = self._counter.true_count()
-        bal_str = f"bal={gf.balance}" if gf.balance else "bal=?"
+        chosen     = affordable[-1] if affordable else available[0]
+        tc         = self._counter.true_count()
+        bal_str    = f"bal={gf.balance}" if gf.balance else "bal=?"
         log.info("Auto-bet: TC=%.1f %s → chip %d", tc, bal_str, chosen)
 
-        from .game_detector import Layout
+        # Step 1: Clear any previous bet so we start fresh
+        clear_x = int(Layout.DARK_BTN_CLEAR_X * gf.frame_w)
+        clear_y = int(Layout.DARK_BTN_CY_FRAC * gf.frame_h)
+        log.info("Auto-bet: tapping Clear at (%d,%d)", clear_x, clear_y)
+        self._adb.tap(clear_x, clear_y)
+        time.sleep(0.6)   # short wait for clear animation
+
+        # Step 2: Tap the chosen chip
         x, y = gf.chips[chosen]
         self._adb.tap(x, y)
         log.info("Auto-bet: tapped chip %d at (%d,%d)", chosen, x, y)
 
-        # Wait for the app to register the bet (chip animation)
-        time.sleep(1.2)
+        # Step 3: Wait for chip-placement animation to complete
+        time.sleep(1.5)
 
-        # Tap Deal at the verified fixed position (0.75w, 0.805h)
-        deal_x = int(Layout.DARK_BTN_DEAL_X  * gf.frame_w)
+        # Step 4: Tap Deal (two taps 0.4s apart — app occasionally needs two)
+        deal_x = int(Layout.DARK_BTN_DEAL_X * gf.frame_w)
         deal_y = int(Layout.DARK_BTN_CY_FRAC * gf.frame_h)
-        log.info("Auto-bet: tapping Deal at fixed position (%d,%d)", deal_x, deal_y)
+        log.info("Auto-bet: tapping Deal at (%d,%d)", deal_x, deal_y)
         self._adb.tap(deal_x, deal_y)
+        time.sleep(0.4)
+        self._adb.tap(deal_x, deal_y)   # second tap — safety
 
         self._last_bet_denomination = chosen
         self._bet_placed            = True
         self._last_tap_time         = time.monotonic()
-        # Do NOT reset _bet_phase_entered here — that would cause the
-        # betting phase entry block to re-run and reset _bet_placed=False
+        # Do NOT reset _bet_phase_entered here
 
     # ------------------------------------------------------------------
     # Play action (playing phase)

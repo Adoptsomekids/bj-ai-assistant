@@ -97,7 +97,7 @@ class Layout:
     DARK_BTN_Y_BOTTOM = 0.840
     DARK_BTN_CLEAR_X  = 0.381  # centre x of Clear button (verified: x=412/1080)
     DARK_BTN_DEAL_X   = 0.620  # centre x of Deal button  (verified: x=670/1080)
-    DARK_BTN_CY_FRAC  = 0.817  # centre y of both buttons (verified: y=1913/2340)
+    DARK_BTN_CY_FRAC  = 0.810  # centre y — Unity tap registers at y=1895/2340=0.810
 
     # Game state detection — result overlay text region
     # IMPORTANT: must NOT overlap the permanent felt text:
