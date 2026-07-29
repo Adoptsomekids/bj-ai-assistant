@@ -27,6 +27,7 @@ from .strategy import GameState, HiLoCounter, decide, hand_total
 from .overlay import HUDOverlay
 from .ai.ai_advisor import AIAdvisor
 from .ai.kelly import kelly_bet_units, kelly_chip_amount, bet_spread_label
+from .ai.recorder import HandRecorder
 
 log = logging.getLogger(__name__)
 
@@ -58,6 +59,9 @@ class BJEngine:
         self._last_decision: Optional[dict] = None
         # AI layer: Monte Carlo Q-table advisor (loads silently, falls back if not trained)
         self._ai_advisor = AIAdvisor.get_instance()
+        # Option C: record every hand for offline retraining + stats
+        self._recorder   = HandRecorder(enabled=True)
+        self._last_bs_action: Optional[str] = None   # BS recommendation for current hand
         # Track last seen player+dealer state to avoid re-counting same cards
         self._last_player_total: Optional[int] = None
         self._last_dealer_total: Optional[int] = None
@@ -109,6 +113,13 @@ class BJEngine:
         if self._thread:
             self._thread.join(timeout=5)
         self._capture.release()
+        # Flush replay buffer and print session stats
+        n = self._recorder.flush()
+        if n > 0:
+            stats = self._recorder.session_stats()
+            log.info("Session: %d hands recorded — W:%d L:%d P:%d  EV:%.4f  BS_acc:%.0f%%",
+                     stats.get("hands",0), stats.get("wins",0), stats.get("losses",0),
+                     stats.get("pushes",0), stats.get("ev",0), stats.get("bs_accuracy",0)*100)
         log.info("BJ Engine stopped")
 
     def reset_count(self) -> None:
@@ -155,6 +166,9 @@ class BJEngine:
                     self._losses += 1
                 elif outcome == "push":
                     self._pushes += 1
+
+                # Option C: record outcome for replay buffer
+                self._recorder.record_result(outcome)
 
             # Count this hand (whether we started mid-hand or played it fully)
             if not self._result_handled:
@@ -355,6 +369,20 @@ class BJEngine:
                 decision.get("reasoning", "") +
                 f"  [AI✓]"
             )
+
+        # Option C: record this action to replay buffer
+        self._recorder.record_action(
+            player_total  = player_total,
+            is_soft       = is_soft,
+            dealer_upcard = dealer_upcard or "?",
+            true_count    = self._counter.true_count(),
+            action_taken  = decision.get("action", "H"),
+            bs_action     = bs_action or decision.get("action", "H"),
+            ai_action     = ai_action,
+            can_double    = "Double" in gf.buttons,
+            can_split     = "Split"  in gf.buttons,
+            bet_amount    = self._last_bet_denomination or 250,
+        )
 
         # Store bubble totals for display — never the synthetic card components
         decision["player_total"]      = player_total

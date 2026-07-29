@@ -373,6 +373,46 @@ def calibrate(serial: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# stats — show replay buffer statistics
+# ---------------------------------------------------------------------------
+
+@cli.command("stats")
+@click.option("--buffer", default=None, help="Path to replay_buffer.jsonl")
+def stats_cmd(buffer: str) -> None:
+    """Show session statistics from the replay buffer."""
+    from .ai.recorder import replay_stats
+    from pathlib import Path
+
+    s = replay_stats(Path(buffer) if buffer else None)
+
+    if not s.get("completed_hands"):
+        console.print("[yellow]No completed hands in replay buffer yet.[/yellow]")
+        console.print("[dim]Play some hands with  bj-assistant run  to start recording.[/dim]")
+        return
+
+    tc = Table(title="♠ Replay Buffer Stats", show_header=True, header_style="bold cyan")
+    tc.add_column("Metric", style="dim")
+    tc.add_column("Value", style="bold")
+
+    tc.add_row("Sessions",        str(s["sessions"]))
+    tc.add_row("Hands recorded",  str(s["completed_hands"]))
+    tc.add_row("Wins",            f"[green]{s['wins']}[/green]")
+    tc.add_row("Losses",          f"[red]{s['losses']}[/red]")
+    tc.add_row("Pushes",          str(s["pushes"]))
+    tc.add_row("Win rate",        f"{s['win_rate']:.1%}")
+    tc.add_row("EV per hand",     f"[{'green' if s['ev_per_hand']>=0 else 'red'}]{s['ev_per_hand']:+.4f}[/]")
+    tc.add_row("BS accuracy",     f"{s['bs_accuracy']:.1%}")
+    console.print(tc)
+
+    if s.get("ev_by_tc"):
+        console.print("\n[dim]EV by True Count:[/dim]")
+        for tc_val, ev in sorted(s["ev_by_tc"].items()):
+            bar = "█" * max(0, int((ev + 1) * 10))
+            colour = "green" if ev > 0 else "red"
+            console.print(f"  TC{tc_val:+3d}: [{colour}]{ev:+.4f}[/{colour}]  {bar}")
+
+
+# ---------------------------------------------------------------------------
 # train-ai — offline Q-table training
 # ---------------------------------------------------------------------------
 
