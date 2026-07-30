@@ -219,6 +219,15 @@ class BJEngine:
                 self._bet_phase_entered = now
                 self._bet_placed = False   # fresh betting phase — reset
 
+            # ── Post-bet grace period ─────────────────────────────────
+            # After _place_bet taps Deal, card animation takes 3-5 s.
+            # During that time OCR may still see state=betting.
+            # Wait 6 s before doing anything else in betting phase.
+            if self._bet_placed and (time.monotonic() - self._last_tap_time) < 6.0:
+                log.debug("Post-bet grace: %.1fs since Deal tap — waiting for cards",
+                          time.monotonic() - self._last_tap_time)
+                return
+
             tc  = self._counter.true_count()
             rc  = self._counter.running_count
             # Kelly Criterion bet sizing (replaces simple TC spread)
