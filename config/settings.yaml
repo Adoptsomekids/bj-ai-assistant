@@ -3,7 +3,7 @@
 
 # ─── Capture ────────────────────────────────────────────────────────────────
 device_serial: null        # null = auto-detect; or e.g. "192.168.1.5:5555"
-fps: 5                     # frames per second for capture loop
+fps: 10                    # frames per second for capture loop
 capture_backend: "auto"    # "adb" | "scrcpy" | "macos" | "auto"
 
 # ─── Strategy ───────────────────────────────────────────────────────────────
