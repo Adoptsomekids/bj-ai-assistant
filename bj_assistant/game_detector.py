@@ -295,14 +295,11 @@ class VegasBJDetector:
 
         if gf.game_state in ("betting", "result"):
             gf.chips = self._detect_chips(frame, w, h)
-            # When bet is placed, Clear/Deal are at known fixed positions
-            # (verified from live frame OCR: y≈0.805h, Clear x≈0.25w, Deal x≈0.75w)
-            if gf.bet_is_placed:
-                gf.clear_btn = (int(Layout.DARK_BTN_CLEAR_X * w), int(Layout.DARK_BTN_CY_FRAC * h))
-                gf.deal_btn  = (int(Layout.DARK_BTN_DEAL_X  * w), int(Layout.DARK_BTN_CY_FRAC * h))
-            else:
-                # No bet yet — detect the green Deal button (for result phase)
-                gf.deal_btn = self._detect_deal_button(frame, w, h)
+            # Deal/Clear are always at the same fixed Unity positions (verified y=1895).
+            # Never use blob-detection for result phase — the large result-screen blob
+            # lands at y≈2161 (chip row) and causes mis-taps.
+            gf.deal_btn  = (int(Layout.DARK_BTN_DEAL_X  * w), int(Layout.DARK_BTN_CY_FRAC * h))
+            gf.clear_btn = (int(Layout.DARK_BTN_CLEAR_X * w), int(Layout.DARK_BTN_CY_FRAC * h))
 
         # Always read balance (visible in all states at top-left)
         gf.balance = self._read_balance(frame, w, h)
