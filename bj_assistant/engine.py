@@ -84,6 +84,7 @@ class BJEngine:
         self._hands_completed: int = 0
         self._started_mid_hand: bool = False
         self._result_handled: bool = False   # True while still in result screen
+        self._played_this_hand: bool = False  # True once we see playing state this hand
         # Last bet denomination placed (to detect when we need to change it)
         self._last_bet_denomination: int = 0
         # Session stats
@@ -169,8 +170,9 @@ class BJEngine:
 
         # ── Result phase: count hand + reset + auto-tap Deal ─────────
         if gf.game_state == "result":
-            # Parse win/loss/push text and update stats (once per result screen)
-            if not self._result_handled:
+            # Only count a result if we actually saw the playing phase this hand.
+            # This prevents counting stale result screens visible at engine startup.
+            if not self._result_handled and self._played_this_hand:
                 outcome = self._parse_result_text(frame)
                 if outcome == "win":
                     self._wins += 1
@@ -182,8 +184,6 @@ class BJEngine:
                 # Option C: record outcome for replay buffer
                 self._recorder.record_result(outcome)
 
-            # Count this hand (whether we started mid-hand or played it fully)
-            if not self._result_handled:
                 self._hands_completed  += 1
                 self._hand_counted      = False
                 self._last_player_total = None
@@ -191,9 +191,11 @@ class BJEngine:
                 self._bet_placed        = False
                 self._bet_phase_entered = 0.0
                 self._started_mid_hand  = False
+                self._played_this_hand  = False
                 self._result_handled    = True
-                log.info("Hand #%d complete — W:%d L:%d P:%d",
-                         self._hands_completed, self._wins, self._losses, self._pushes)
+                log.info("Hand #%d complete — W:%d L:%d P:%d  outcome=%s",
+                         self._hands_completed, self._wins, self._losses, self._pushes,
+                         outcome or "unknown")
 
             # Auto-tap Deal to start next hand immediately
             if self._auto_tap and self._adb:
@@ -267,12 +269,14 @@ class BJEngine:
         if not gf.is_actionable:
             if gf.game_state == "playing":
                 self._result_handled = False
-                self._bet_phase_entered = 0.0  # reset so next bet phase starts fresh
+                self._bet_phase_entered = 0.0
+                self._played_this_hand = True   # we saw playing state — result will count
             return
 
         # Actionable playing frame
-        self._result_handled   = False
-        self._bet_phase_entered = 0.0  # reset so next bet phase starts fresh
+        self._result_handled    = False
+        self._bet_phase_entered = 0.0
+        self._played_this_hand  = True
 
         # Use rank OCR result if available; fall back to bubble total as upcard
         dealer_upcard = gf.effective_dealer_upcard
