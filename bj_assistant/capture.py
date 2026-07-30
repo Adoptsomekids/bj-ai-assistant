@@ -158,6 +158,12 @@ class ADBCapture(ScreenCapture):
 
     def tap(self, x: int, y: int) -> bool:
         """Send a tap event to the device at screen coordinates (x, y)."""
+        import traceback as _tb
+        caller = _tb.extract_stack()[-2]  # immediate caller
+        log.warning(
+            "ADB TAP (%d,%d) — called from %s:%d in %s()",
+            x, y, caller.filename.split("/")[-1], caller.lineno, caller.name
+        )
         try:
             subprocess.run(
                 self._adb_args + ["shell", "input", "tap", str(x), str(y)],
