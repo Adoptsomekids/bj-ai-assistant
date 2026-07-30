@@ -105,9 +105,9 @@ class Layout:
     #   "Dealer Must Stand Soft 17"  at y≈30%–33%
     # Result banners ("Dealer Wins", "You Win", etc.) appear at y≈18%–26%
     RESULT_REGION_X = 0.05
-    RESULT_REGION_Y = 0.18   # was 0.38 — moved UP to avoid felt text
+    RESULT_REGION_Y = 0.15   # slightly higher to catch banners near top
     RESULT_REGION_W = 0.90
-    RESULT_REGION_H = 0.10   # tight band: only the result banner area
+    RESULT_REGION_H = 0.20   # wider band: covers 15%–35% of screen height
 
     # Deal / Play button — appears after result or on betting screen.
     # Observed on live frame at (870, 1994) = y≈0.852, x≈0.806
@@ -340,24 +340,42 @@ class VegasBJDetector:
         # hit_bright_green_px ≥ 3000 means the Hit button (bright lime green) is
         # visible, which only happens during the playing phase. The betting screen
         # has no bright-green buttons — the "500" chip is teal/muted (outside range).
-        # Previously this check ran AFTER OCR, causing "betting" false positives
-        # when OCR read "clear"/"deal" from the same strip during active play.
         if self._colour_buttons_visible(frame, w, h):
             return "playing"
 
-        # ── 2. Result overlay OCR ────────────────────────────────────────
+        # ── 2. Colour-based result detection ─────────────────────────────
+        # After the hand ends, the Unity app keeps Stand/Double/Split buttons
+        # visible (in colour) but removes the Hit button.  This combination —
+        # Stand present + Hit absent — is unique to the result phase and is
+        # detectable instantly without OCR.
+        y1 = int(Layout.BUTTON_ROW_Y_TOP * h)
+        y2 = int(Layout.BUTTON_ROW_Y_BOTTOM * h)
+        strip = frame[y1:y2, 0:w]
+        hsv   = cv2.cvtColor(strip, cv2.COLOR_BGR2HSV)
+        stand_lo  = np.array(Layout.BUTTON_COLOURS["Stand"][0])
+        stand_hi  = np.array(Layout.BUTTON_COLOURS["Stand"][1])
+        stand_min = Layout.BUTTON_COLOURS["Stand"][2]
+        stand_px  = int(np.count_nonzero(cv2.inRange(hsv, stand_lo, stand_hi)))
+        log.debug("Result colour check: stand_px=%d (min=%d)", stand_px, stand_min)
+        if stand_px >= stand_min:
+            log.debug("Stand visible without Hit → result")
+            return "result"
+
+        # ── 3. Result overlay OCR (fallback) ─────────────────────────────
         rx = int(Layout.RESULT_REGION_X * w)
         ry = int(Layout.RESULT_REGION_Y * h)
         rw = int(Layout.RESULT_REGION_W * w)
         rh = int(Layout.RESULT_REGION_H * h)
         result_roi  = frame[ry:ry+rh, rx:rx+rw]
         result_text = self._ocr_text(result_roi).lower()
+        log.debug("Result region OCR: %r", result_text)
         RESULT_KEYWORDS = ("dealer wins", "player wins", "you win", "push", "bust",
-                           "dealer busts", "you bust", "it's a tie", "blackjack")
+                           "dealer busts", "you bust", "it's a tie", "blackjack",
+                           "wins", "win", "lose", "lost", "tie")
         if any(kw in result_text for kw in RESULT_KEYWORDS):
             return "result"
 
-        # ── 3. Button strip OCR — only reached when colour says NOT playing ──
+        # ── 4. Button strip OCR — only reached when colour says NOT playing ──
         btn_strip = self._get_button_strip(frame, w, h)
         btn_text  = self._ocr_text(btn_strip).lower()
         log.debug("Button strip OCR: %r", btn_text)
@@ -366,7 +384,7 @@ class VegasBJDetector:
         if any(word in btn_text for word in BETTING_WORDS):
             return "betting"
 
-        # ── 4. Action word OCR fallback ──────────────────────────────────
+        # ── 5. Action word OCR fallback ──────────────────────────────────
         ACTION_WORDS = ("stand", "hit", "double", "split", "surrender")
         if any(word in btn_text for word in ACTION_WORDS):
             return "playing"

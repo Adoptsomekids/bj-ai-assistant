@@ -79,6 +79,7 @@ class BJEngine:
         # Betting phase state
         self._bet_placed: bool = False
         self._bet_phase_entered: float = 0.0
+        self._last_game_state: str = "unknown"   # track state transitions for debug saves
         # hands_completed: counts how many full hands have been seen.
         self._hands_completed: int = 0
         self._started_mid_hand: bool = False
@@ -154,6 +155,17 @@ class BJEngine:
         # ── Parse the frame ──────────────────────────────────────────
         gf: GameFrame = self._detector.detect(frame)
         self._live_buttons = gf.buttons
+
+        # ── Debug: save frame on playing→non-playing transition ──────
+        # This captures the result screen (short-lived) for OCR tuning.
+        if self._last_game_state == "playing" and gf.game_state != "playing":
+            try:
+                import cv2 as _cv2
+                _cv2.imwrite("/tmp/bj_transition_frame.png", frame)
+                log.info("Debug: saved transition frame to /tmp/bj_transition_frame.png (was playing → %s)", gf.game_state)
+            except Exception:
+                pass
+        self._last_game_state = gf.game_state
 
         # ── Result phase: count hand + reset + auto-tap Deal ─────────
         if gf.game_state == "result":
