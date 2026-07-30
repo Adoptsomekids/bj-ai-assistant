@@ -64,12 +64,19 @@ class ADBCapture(ScreenCapture):
         "/usr/local/bin/adb",      # Intel Mac
     ]
 
+    # How many consecutive unauthorized errors before we try to recover
+    _UNAUTH_RECOVER_AFTER = 3
+    # Minimum seconds between recovery attempts (avoid spam)
+    _UNAUTH_RECOVER_COOLDOWN = 15.0
+
     def __init__(self, device_serial: Optional[str] = None) -> None:
         self._serial = device_serial
         adb_bin = self._find_adb()
         self._adb_args = [adb_bin]
         if device_serial:
             self._adb_args += ["-s", device_serial]
+        self._unauth_streak: int = 0
+        self._last_recover_time: float = 0.0
 
     @classmethod
     def _find_adb(cls) -> str:
@@ -102,14 +109,52 @@ class ADBCapture(ScreenCapture):
                 capture_output=True, timeout=10
             )
             if result.returncode != 0:
-                log.warning("adb screencap failed: %s", result.stderr)
+                stderr = result.stderr.decode("utf-8", errors="replace") if result.stderr else ""
+                if "unauthorized" in stderr or "ADB_VENDOR_KEYS" in stderr:
+                    self._unauth_streak += 1
+                    if self._unauth_streak == 1:
+                        # First hit: print a visible actionable warning immediately
+                        log.warning(
+                            "⚠️  ADB UNAUTHORIZED — phone revoked debug permission.\n"
+                            "   On your phone: look for an 'Allow USB Debugging?' dialog and tap OK.\n"
+                            "   If no dialog: Settings → Developer Options → Revoke USB Debugging Authorizations, "
+                            "then unplug/replug USB and tap OK.\n"
+                            "   The assistant will keep trying and recover automatically."
+                        )
+                    elif self._unauth_streak >= self._UNAUTH_RECOVER_AFTER:
+                        import time as _t
+                        if _t.monotonic() - self._last_recover_time > self._UNAUTH_RECOVER_COOLDOWN:
+                            self._try_adb_recover()
+                else:
+                    self._unauth_streak = 0
+                    log.warning("adb screencap failed: %s", result.stderr[:200])
                 return None
+            self._unauth_streak = 0
             arr = np.frombuffer(result.stdout, dtype=np.uint8)
             img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
             return img
         except Exception as exc:
             log.error("ADB grab error: %s", exc)
             return None
+
+    def _try_adb_recover(self) -> None:
+        """
+        Attempt to recover from ADB unauthorized state.
+        Runs 'adb kill-server' + 'adb start-server' to force a fresh connection.
+        The phone will show a new 'Allow USB Debugging?' dialog.
+        """
+        import time as _time
+        self._last_recover_time = _time.monotonic()
+        self._unauth_streak = 0
+        adb = self._adb_args[0]
+        log.warning("ADB recovery: running 'adb kill-server' + 'adb start-server'...")
+        try:
+            subprocess.run([adb, "kill-server"], timeout=5, capture_output=True)
+            _time.sleep(1.0)
+            subprocess.run([adb, "start-server"], timeout=10, capture_output=True)
+            log.info("ADB recovery: server restarted — check phone for 'Allow USB Debugging?' dialog")
+        except Exception as exc:
+            log.error("ADB recovery failed: %s", exc)
 
     def tap(self, x: int, y: int) -> bool:
         """Send a tap event to the device at screen coordinates (x, y)."""
