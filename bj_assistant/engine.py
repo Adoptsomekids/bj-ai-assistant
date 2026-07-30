@@ -210,11 +210,15 @@ class BJEngine:
             # Leaving result phase → clear result_handled so next result is counted
             self._result_handled = False
 
-            # Safety: if strip OCR is empty AND no chips detected, the game
-            # is probably not in the foreground (notification, other app, etc.)
-            # Don't tap anything in this case.
-            if not gf.strip_text and not gf.chips and not gf.bet_is_placed:
-                log.warning("Betting phase: no strip text and no chips — game may not be in foreground, skipping")
+            now = time.monotonic()
+            if self._bet_phase_entered == 0.0:
+                self._bet_phase_entered = now
+                self._bet_placed = False   # fresh betting phase — reset
+                log.debug("Betting phase entered (t=%.1f)", now)
+
+            # Safety: no chips AND no bet already placed → game not ready yet (ad/animation)
+            if not gf.chips and not gf.bet_is_placed:
+                log.debug("Betting phase: chips not visible yet — waiting")
                 if self._overlay:
                     self._overlay.update({
                         "phase": "betting",
@@ -225,11 +229,6 @@ class BJEngine:
                         "wins": self._wins, "losses": self._losses, "pushes": self._pushes,
                     })
                 return
-
-            now = time.monotonic()
-            if self._bet_phase_entered == 0.0:
-                self._bet_phase_entered = now
-                self._bet_placed = False   # fresh betting phase — reset
 
             # ── Post-bet grace period ─────────────────────────────────
             # After _place_bet taps Deal, card animation takes 3-5 s.
