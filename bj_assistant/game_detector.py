@@ -266,43 +266,49 @@ class VegasBJDetector:
         h, w = frame.shape[:2]
         gf = GameFrame(frame_w=w, frame_h=h)
 
-        btn_strip = self._get_button_strip(frame, w, h)
-        gf.strip_text = self._ocr_text(btn_strip).lower()
-
-        # Read the bet-amount zone y=0.688-0.715 — shows placed bet amount
-        # e.g. "250" when a 250 chip is on the table, empty when no bet
-        bet_y1 = int(0.688 * h)
-        bet_y2 = int(0.718 * h)
-        bet_zone = frame[bet_y1:bet_y2, 0:w]
-        bet_big  = cv2.resize(bet_zone, None, fx=4, fy=4, interpolation=cv2.INTER_CUBIC)
-        cfg_digits = "--oem 3 --psm 7 -c tessedit_char_whitelist=0123456789"
-        gf.bet_strip_text = (
-            self._tess.image_to_string(bet_big, config=cfg_digits).strip()
-            if self._tess else ""
-        )
-
+        # ── Step 1: detect game state (colour-first, fast) ───────────
+        # strip_text OCR only needed when colour check is inconclusive
         gf.game_state = self._detect_game_state(frame, w, h)
 
-        if gf.game_state in ("playing", "result"):
+        # ── Step 2: state-specific extraction ────────────────────────
+        if gf.game_state == "playing":
+            # Playing: read bubbles + buttons only. No bet/chip OCR needed.
             gf.dealer_total       = self._read_bubble(frame, w, h, "dealer")
             gf.player_total       = self._read_bubble(frame, w, h, "player")
             gf.dealer_upcard_rank = self._read_card_rank(frame, w, h, "dealer")
             gf.player_card_ranks  = self._read_player_ranks(frame, w, h)
             gf.is_soft            = self._detect_soft(gf.player_card_ranks)
+            gf.buttons            = self._detect_buttons(frame, w, h)
 
-        if gf.game_state == "playing":
-            gf.buttons = self._detect_buttons(frame, w, h)
-
-        if gf.game_state in ("betting", "result"):
-            gf.chips = self._detect_chips(frame, w, h)
-            # Deal/Clear are always at the same fixed Unity positions (verified y=1895).
-            # Never use blob-detection for result phase — the large result-screen blob
-            # lands at y≈2161 (chip row) and causes mis-taps.
+        elif gf.game_state == "result":
+            # Result: read bubbles for stats + chip/deal positions for auto-tap
+            gf.dealer_total       = self._read_bubble(frame, w, h, "dealer")
+            gf.player_total       = self._read_bubble(frame, w, h, "player")
+            gf.dealer_upcard_rank = self._read_card_rank(frame, w, h, "dealer")
+            gf.player_card_ranks  = self._read_player_ranks(frame, w, h)
+            gf.is_soft            = self._detect_soft(gf.player_card_ranks)
+            gf.chips              = self._detect_chips(frame, w, h)
             gf.deal_btn  = (int(Layout.DARK_BTN_DEAL_X  * w), int(Layout.DARK_BTN_CY_FRAC * h))
             gf.clear_btn = (int(Layout.DARK_BTN_CLEAR_X * w), int(Layout.DARK_BTN_CY_FRAC * h))
 
-        # Always read balance (visible in all states at top-left)
-        gf.balance = self._read_balance(frame, w, h)
+        elif gf.game_state == "betting":
+            # Betting: need bet_strip (for bet_is_placed), chips, deal/clear positions.
+            # strip_text needed for fallback state detection — read it now.
+            btn_strip = self._get_button_strip(frame, w, h)
+            gf.strip_text = self._ocr_text(btn_strip).lower()
+            bet_y1 = int(0.688 * h)
+            bet_y2 = int(0.718 * h)
+            bet_zone = frame[bet_y1:bet_y2, 0:w]
+            bet_big  = cv2.resize(bet_zone, None, fx=4, fy=4, interpolation=cv2.INTER_CUBIC)
+            cfg_digits = "--oem 3 --psm 7 -c tessedit_char_whitelist=0123456789"
+            gf.bet_strip_text = (
+                self._tess.image_to_string(bet_big, config=cfg_digits).strip()
+                if self._tess else ""
+            )
+            gf.chips     = self._detect_chips(frame, w, h)
+            gf.deal_btn  = (int(Layout.DARK_BTN_DEAL_X  * w), int(Layout.DARK_BTN_CY_FRAC * h))
+            gf.clear_btn = (int(Layout.DARK_BTN_CLEAR_X * w), int(Layout.DARK_BTN_CY_FRAC * h))
+            gf.balance   = self._read_balance(frame, w, h)
 
         log.debug(
             "Frame: state=%s dealer=%s player=%s(%s) upcard=%s btns=%s chips=%s",
